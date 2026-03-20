@@ -27,6 +27,7 @@ function useCountUp(target: number, duration = 2000, delay = 500): number {
   const rafRef            = useRef<number>(0);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset animation on target change
     setValue(0);
     const timeout = setTimeout(() => {
       const start = performance.now();

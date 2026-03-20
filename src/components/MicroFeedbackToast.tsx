@@ -24,6 +24,7 @@ export interface MicroResult {
 }
 
 /** Parse the AI's micro-analysis response into structured fields. */
+// eslint-disable-next-line react-refresh/only-export-components
 export function parseMicroResult(text: string): MicroResult {
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
 

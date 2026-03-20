@@ -314,6 +314,7 @@ export default function Onboarding() {
 
   // Auto-fill SIP when goal/horizon changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- auto-fill SIP from computed value
     if (requiredSIP > 0) setSipAmount(String(requiredSIP));
   }, [requiredSIP]);
 

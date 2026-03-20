@@ -20,7 +20,7 @@ export interface HealthBreakdown {
  *
  * Total: 100 pts
  */
-export function calculateHealthScore(holdings: any[]): HealthBreakdown {
+export function calculateHealthScore(holdings: Record<string, unknown>[]): HealthBreakdown {
   if (!holdings || holdings.length === 0) {
     return { total: 0, diversification: 0, concentration: 0, profitability: 0 };
   }
@@ -36,9 +36,9 @@ export function calculateHealthScore(holdings: any[]): HealthBreakdown {
 
   // ── Concentration (35 pts) ───────────────────────────────────────────────
   // Compute each holding's weight by current value (shares × livePrice ?? buyPrice)
-  const values = holdings.map((h: any) => {
-    const price  = h.livePrice ?? h.buyPrice ?? 0;
-    const shares = h.shares ?? h.quantity ?? 0;
+  const values = holdings.map((h: Record<string, unknown>) => {
+    const price  = (h.livePrice as number) ?? (h.buyPrice as number) ?? 0;
+    const shares = (h.shares as number) ?? (h.quantity as number) ?? 0;
     return Math.max(0, price * shares);
   });
   const totalVal = values.reduce((s: number, v: number) => s + v, 0);
@@ -56,13 +56,13 @@ export function calculateHealthScore(holdings: any[]): HealthBreakdown {
   }
 
   // ── Profitability (40 pts) ────────────────────────────────────────────────
-  const pricedHoldings = holdings.filter((h: any) => h.livePrice != null);
+  const pricedHoldings = holdings.filter((h: Record<string, unknown>) => h.livePrice != null);
   let profitability: number;
   if (pricedHoldings.length === 0) {
     profitability = 20; // no price data — give neutral score
   } else {
     const profitable = pricedHoldings.filter(
-      (h: any) => (h.livePrice ?? 0) >= (h.buyPrice ?? 0),
+      (h: Record<string, unknown>) => ((h.livePrice as number) ?? 0) >= ((h.buyPrice as number) ?? 0),
     ).length;
     const pct = profitable / pricedHoldings.length; // 0–1
     if      (pct >= 0.80) profitability = 40;

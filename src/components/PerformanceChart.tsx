@@ -164,7 +164,7 @@ function LineChart({
             padding:         10,
             callbacks: {
               label: (ctx) => {
-                const val = ctx.parsed.y.toFixed(1);
+                const val = ctx.parsed.y?.toFixed(1) ?? '0';
                 return `${ctx.dataset.label}: ${val} (indexed)`;
               },
             },
@@ -275,7 +275,7 @@ export default function PerformanceChart({ portfolio }: Props) {
     if (portfolio.length === 0) { setLoading(false); return; }
     void fetchData(range);
     return () => abortRef.current?.abort();
-  }, [range, fetchData]);
+  }, [range, fetchData, portfolio.length]);
 
   // ── Derived values ─────────────────────────────────────────────────────────
 

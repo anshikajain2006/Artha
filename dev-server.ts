@@ -29,6 +29,7 @@ const app = express();
 app.use(express.json({ limit: '20mb' }));
 
 // Shim VercelRequest/VercelResponse → Express req/res
+/* eslint-disable @typescript-eslint/no-unsafe-function-type, @typescript-eslint/no-explicit-any */
 function makeVercelHandler(handler: Function) {
   return async (req: express.Request, res: express.Response) => {
     const vReq = Object.assign(req, { body: req.body }) as any;
@@ -41,6 +42,7 @@ function makeVercelHandler(handler: Function) {
     await handler(vReq, vRes);
   };
 }
+/* eslint-enable @typescript-eslint/no-unsafe-function-type, @typescript-eslint/no-explicit-any */
 
 async function main() {
   const { default: analyzeHandler }          = await import('./api/analyze.js');

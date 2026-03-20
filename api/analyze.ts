@@ -200,7 +200,6 @@ Something doable on Groww in 5 minutes.
 }
 
 function buildScenarioPrompt(p: PortfolioData, ctx: UserContext): string {
-  const tickers = p.holdings.map(h => h.ticker).join(', ');
   return `${VOICE}
 
 You are Artha's risk analyst for Indian markets. Stress-test this portfolio under real market conditions. Be specific to EACH holding — no generic commentary. Reference real Indian market events.
@@ -552,130 +551,6 @@ function buildPrompt(
     case 'priority': return buildPriorityPrompt(p, ctx);
     case 'macro':    return buildMacroPrompt(p, ctx);
   }
-}
-
-// ── Legacy (unused — keeping exports for any future reference) ────────────────
-
-const SYSTEM_PROMPT = `You are Artha — a brutally honest friend who knows Indian stock markets inside out. You talk to a smart 22-year-old who invests on Groww but is not a finance professional. Your job is to tell them the truth, fast, in plain English.
-
-CRITICAL LANGUAGE RULES — break these and you fail:
-- Write like a smart friend texting, not a report or a chatbot.
-- NEVER use jargon without explaining it immediately in plain words.
-  WRONG: "The portfolio exhibits concentration risk."
-  RIGHT: "Too much of your money is in one stock — if it crashes, your whole portfolio crashes with it."
-- NEVER use these words: exhibits, negating, susceptible, predominantly, negligible, adverse, volatility, equities, correlation, diversification (use "spread your money" instead), allocation (use "where your money goes").
-- Keep sentences short. Maximum 20 words each.
-- ALWAYS quote ₹ amounts alongside percentages.
-  WRONG: "The position is down 37%."
-  RIGHT: "You've lost ₹1,200 on this — that's 37% of what you put in."
-- Format large numbers as ₹X.X L (lakhs) or ₹X.X Cr (crores).
-- Every section must end with one **Action** — specific, doable TODAY, naming a ticker or instrument.
-  WRONG: "Consider spreading your money."
-  RIGHT: "**Action:** Sell 30% of your Silver ETF position today and put that ₹ into NIFTYBEES."
-- For health scores, explain the number in plain terms:
-  WRONG: "Diversification (18/30): The score indicates very poor diversification."
-  RIGHT: "**Diversification — 18/30:** Almost all your money is in 2 stocks. If either crashes, you're done. You need at least 5 sectors to push this above 25."
-- Tone: direct, confident, zero fluff. Like a brutally honest mentor.
-- Never be vague. If you don't know the reason, say "I can't tell from the data" — don't make up a diplomatic non-answer.
-
-PORTFOLIO DATA:
-{PORTFOLIO_DATA}
-
-LIVE PRICES:
-{LIVE_PRICES}
-
-USER GOALS:
-{USER_GOALS}
-
-INVESTMENT HORIZON: {INVESTMENT_HORIZON}
-RISK PROFILE: {RISK_LEVEL}
-MONTHLY INVESTMENT CAPACITY: ₹{SIP_AMOUNT}
-
-OUTPUT FORMAT — use exactly these 8 section headers (## heading format):
-
-## Portfolio Snapshot
-2-3 sentences only. Total value, how much is up or down in ₹ and %, and what kind of portfolio this is (e.g. "tech-heavy", "mostly pharma"). Brutal honesty.
-
-## Health Score Analysis
-Overall score: X/100 — one sentence verdict.
-Then for each sub-score, use this exact format:
-**Diversification — X/30:** [plain English explanation, max 2 sentences. End with one Action.]
-**Concentration Risk — X/35:** [same]
-**Profitability — X/35:** [same]
-
-## What's Working
-Up to 3 bullet points. Name the ticker, quote the ₹ gain, say why it worked. Keep it under 20 words per bullet.
-
-## What Needs Fixing
-Up to 3 bullet points. Name the ticker, quote the ₹ loss or risk, say what the problem is. Under 20 words each.
-
-## 3 Priority Actions
-Exactly 3 numbered actions. Each must:
-- Name a specific ticker or fund (e.g. NIFTYBEES, RELIANCE, HDFCBANK)
-- Say exactly what to do (buy / sell / move money)
-- Say why in one sentence
-- Be doable in the next 7 days
-
-## SIP Allocation Plan
-Given a monthly SIP of ₹{SIP_AMOUNT}: tell them exactly where to put each rupee. Specific % splits with ticker names. If SIP amount is not set, assume ₹5,000 and say so.
-
-## Goal Feasibility Assessment
-For each goal: is it on track or not? What monthly SIP do they need at 12% CAGR? One specific acceleration move. If no goals set, suggest 2 realistic Indian goals with ₹ targets.
-
-## 5-Year Outlook
-Bull case / base case / bear case in ₹ — no ranges, pick a number. End with the single most important decision they need to make this month.
-
----
-⚠️ Disclaimer: AI-generated, not SEBI-registered advice. Verify before acting.`;
-
-// ── Prompt builders ────────────────────────────────────────────────────────────
-
-function buildPortfolioString(p: PortfolioData): string {
-  if (p.holdings.length === 0) return '(no holdings entered)';
-  const lines = p.holdings.map((h) =>
-    `• ${h.name} (${h.ticker}): ${h.shares} shares @ avg ₹${h.avgBuyPrice.toFixed(2)}, now ₹${h.currentPrice.toFixed(2)}, P&L ${h.pnlPct >= 0 ? '+' : ''}${h.pnlPct.toFixed(2)}%, weight ${h.weight.toFixed(1)}%`,
-  );
-  lines.push('');
-  lines.push(`Totals → Invested ₹${p.totalInvested.toFixed(2)} | Current ₹${p.totalValue.toFixed(2)} | P&L ${p.totalPnl >= 0 ? '+' : '-'}₹${Math.abs(p.totalPnl).toFixed(2)} (${p.totalPnlPct >= 0 ? '+' : ''}${p.totalPnlPct.toFixed(2)}%)`);
-  lines.push(`Health Score → ${p.healthScore}/100 (Diversification ${p.diversificationScore} | Concentration ${p.concentrationScore} | Profitability ${p.profitabilityScore})`);
-  lines.push(`Scenarios (±20%) → Bull ₹${p.scenarios.bull.toFixed(2)} | Base ₹${p.scenarios.base.toFixed(2)} | Bear ₹${p.scenarios.bear.toFixed(2)}`);
-  return lines.join('\n');
-}
-
-function buildLivePricesString(p: PortfolioData): string {
-  const live = p.holdings.filter((h) => h.changePercent !== null);
-  if (live.length === 0) return '(mock prices used — no live NSE data available)';
-  return live
-    .map((h) => `${h.ticker}: ₹${h.currentPrice.toFixed(2)} (${h.changePercent! >= 0 ? '+' : ''}${h.changePercent!.toFixed(2)}% today)`)
-    .join(', ');
-}
-
-function buildGoalsString(ctx: UserContext): string {
-  if (ctx.goals.length === 0) return '(no goals set yet)';
-  return ctx.goals
-    .map((g) => `• ${g.name}: ₹${g.targetAmount.toLocaleString('en-IN')} by ${g.targetDate} — ${g.progress.toFixed(1)}% achieved`)
-    .join('\n');
-}
-
-function buildUserPrompt(type: AnalysisType): string {
-  const prompts: Partial<Record<AnalysisType, string>> = {
-    health:   'Perform a deep health analysis of this portfolio. Focus on score drivers, key risks, and the 3 priority actions.',
-    scenario: 'Interpret the bull/base/bear scenarios. Assess whether the investor can sustain the bear drawdown, whether the bull upside justifies concentration, and recommend a specific hedge strategy suited to Indian markets.',
-    picks:    'Identify gaps in this portfolio and generate specific stock picks that complement the current holdings. Prioritise stocks accessible to Indian retail investors on NSE/BSE or US markets via international brokers.',
-    goal:     'Coach this investor on their financial goals. For each goal: on-track status, required monthly SIP at 12% CAGR, and one acceleration tactic. If no goals exist, suggest 2–3 realistic Indian financial goals.',
-  };
-  return prompts[type] ?? '';
-}
-
-function fillTemplate(p: PortfolioData, ctx: UserContext): string {
-  const sip = ctx.monthlyInvestment > 0 ? ctx.monthlyInvestment.toLocaleString('en-IN') : 'Not specified';
-  return SYSTEM_PROMPT
-    .replace('{PORTFOLIO_DATA}',     buildPortfolioString(p))
-    .replace('{LIVE_PRICES}',        buildLivePricesString(p))
-    .replace('{USER_GOALS}',         buildGoalsString(ctx))
-    .replace('{INVESTMENT_HORIZON}', ctx.investmentHorizon || 'Not specified')
-    .replace('{RISK_LEVEL}',         ctx.riskLevel || 'Not specified')
-    .replaceAll('{SIP_AMOUNT}',      sip);
 }
 
 // ── India-only system instruction for picks ───────────────────────────────────

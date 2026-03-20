@@ -185,18 +185,6 @@ function parseAnalysis(text: string): { comparison: ComparisonData | null; narra
   return { comparison, narrative };
 }
 
-function parseRecommendations(text: string): Array<{ action: 'add' | 'remove'; ticker: string }> {
-  const results: Array<{ action: 'add' | 'remove'; ticker: string }> = [];
-  for (const line of text.split('\n')) {
-    const m = line.match(/\*\*(Add|Buy|Remove|Reduce|Sell|Exit)\*\*.*?NSE:([A-Z0-9]+)/i);
-    if (m) {
-      const action: 'add' | 'remove' = /add|buy/i.test(m[1]) ? 'add' : 'remove';
-      const ticker = m[2];
-      if (!results.find((r) => r.ticker === ticker)) results.push({ action, ticker });
-    }
-  }
-  return results.slice(0, 3);
-}
 
 // ── useDebounce hook ──────────────────────────────────────────────────────────
 
@@ -285,7 +273,7 @@ export default function ScenarioSimulator({ portfolio, livePrices, userContext, 
 
     try {
       const sandboxEnriched  = computeEnriched(currentSandbox);
-      const originalEnriched = computeEnriched(initSandbox(portfolioRef.current, livePricesRef.current));
+      computeEnriched(initSandbox(portfolioRef.current, livePricesRef.current));
 
       const totalInvested = sandboxEnriched.reduce((a, h) => a + h.invested, 0);
       const totalVal      = sandboxEnriched.reduce((a, h) => a + h.currentValue, 0);
@@ -360,7 +348,6 @@ export default function ScenarioSimulator({ portfolio, livePrices, userContext, 
       const msg = err instanceof Error ? err.message : 'Analysis failed';
       setAnalysis((prev) => ({ ...prev, loading: false, error: msg }));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [updateScenario]); // updateScenario is stable (useCallback with no deps)
 
   // Scenario change → immediate

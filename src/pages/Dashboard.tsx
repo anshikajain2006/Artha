@@ -14,7 +14,6 @@ import { useArtha } from '../hooks/useArtha';
 import { fetchLivePrices, clearPriceCache, type LivePrice } from '../lib/prices';
 import type { PortfolioData, UserContext } from '../lib/gemini';
 import WatchlistTab        from '../components/WatchlistTab';
-import VsNiftyCard         from '../components/VsNiftyCard';
 import ScenarioSimulator   from '../components/ScenarioSimulator';
 import PerformanceChart    from '../components/PerformanceChart';
 import { getDisplayName }  from '../lib/utils';
@@ -71,6 +70,7 @@ interface PricedRow {
   currentPrice: number; invested: number;
   currentValue: number; pnl: number; pnlPct: number; weight: number;
   changePercent: number | null; // null = mock price, not a live quote
+  priceSource: 'live' | 'unavailable' | null;
 }
 
 interface HealthBreakdown {
@@ -98,21 +98,6 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'plan',      label: 'Plan'      },
 ];
 
-// ── AI request queue ───────────────────────────────────────────────────────────
-// Prevents concurrent Gemini calls that would hit the 5 RPM free tier limit.
-
-const aiQueue = {
-  pending: false,
-  async run(fn: () => Promise<void>, onBusy?: () => void): Promise<void> {
-    if (this.pending) {
-      onBusy?.();
-      return;
-    }
-    this.pending = true;
-    try { await fn(); }
-    finally { this.pending = false; }
-  },
-};
 
 
 
@@ -262,17 +247,6 @@ const GCX = 100, GCY = 90, GR = 72, G_START = 120, G_SWEEP = 300;
 
 // ── Micro-components ───────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, pnl }: { label: string; value: string; sub?: string; pnl?: number }) {
-  return (
-    <div style={{ backgroundColor: C.s1 }} className="artha-card rounded-[14px] border p-5 flex flex-col gap-1">
-      <span className="metric-label">{label}</span>
-      <span style={{ color: C.text }} className="display-num text-2xl">{value}</span>
-      {sub !== undefined && pnl !== undefined && (
-        <span style={{ color: pnl >= 0 ? C.green : C.red }} className="text-sm font-medium">{sub}</span>
-      )}
-    </div>
-  );
-}
 
 function PnlBadge({ value, pct }: { value: number; pct: number }) {
   const pos = value >= 0;
@@ -345,7 +319,7 @@ function PriceStatusBar({ enrichedRows, fetching, lastFetched, onRefresh }: {
   lastFetched:   number | null;
   onRefresh:     () => void;
 }) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   // Tick every 30 s so the "X min ago" label stays accurate
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000);
@@ -477,9 +451,59 @@ function ArthaPanel({ label, onGenerate, loading, error, response, dataAction }:
   );
 }
 
+// ── Add to Watchlist button ──────────────────────────────────────────────────
+
+const GAP_SUGGESTED_TICKERS: Record<string, { ticker: string; name: string }> = {
+  Banking:        { ticker: 'HDFCBANK',    name: 'HDFC Bank' },
+  IT:             { ticker: 'INFY',        name: 'Infosys' },
+  FMCG:           { ticker: 'HINDUNILVR',  name: 'Hindustan Unilever' },
+  Infrastructure: { ticker: 'LT',          name: 'Larsen & Toubro' },
+  'Index Fund':   { ticker: 'NIFTYBEES',   name: 'Nippon Nifty BeES' },
+  Auto:           { ticker: 'MARUTI',      name: 'Maruti Suzuki' },
+  'Real Estate':  { ticker: 'DLF',         name: 'DLF' },
+  Healthcare:     { ticker: 'CIPLA',       name: 'Cipla' },
+};
+
+function WatchlistButton({ ticker, stockName, userId }: { ticker: string; stockName: string; userId: string }) {
+  const [added, setAdded]     = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  async function handleAdd() {
+    if (added || loading || !userId) return;
+    setLoading(true);
+    const result = await addWatchlistItem(userId, stockName, ticker, null);
+    setLoading(false);
+    if (result) setAdded(true);
+  }
+
+  return (
+    <button
+      onClick={handleAdd}
+      disabled={added || loading}
+      style={{
+        background:   added ? 'rgba(78,173,132,0.12)' : 'none',
+        border:       `1px solid ${added ? C.green + '40' : C.border}`,
+        borderRadius: 8,
+        padding:      '5px 12px',
+        fontSize:     11,
+        color:        added ? C.green : C.muted,
+        cursor:       added ? 'default' : 'pointer',
+        fontFamily:   '"DM Sans", system-ui, sans-serif',
+        fontWeight:   500,
+        whiteSpace:   'nowrap',
+        transition:   'all 0.15s',
+      }}
+      onMouseEnter={(e) => { if (!added) { e.currentTarget.style.borderColor = C.gold; e.currentTarget.style.color = C.gold; } }}
+      onMouseLeave={(e) => { if (!added) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; } }}
+    >
+      {loading ? '…' : added ? '✓ Watchlisted' : '+ Watchlist'}
+    </button>
+  );
+}
+
 // ── Picks card (expandable accordion) ────────────────────────────────────────
 
-function PickCard({ section }: { section: string }) {
+function PickCard({ section, userId }: { section: string; userId: string }) {
   const [expanded, setExpanded] = useState(false);
 
   const headerMatch = section.match(/^## (.+?) — NSE:([A-Z0-9]+)/);
@@ -508,6 +532,7 @@ function PickCard({ section }: { section: string }) {
           }}>
             NSE:{ticker}
           </span>
+          <WatchlistButton ticker={ticker} stockName={name} userId={userId} />
         </div>
 
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 16, alignItems: 'flex-start' }}>
@@ -675,9 +700,17 @@ function computePortfolioGaps(rows: PricedRow[]): PortfolioGap[] {
 
 // ── Gap card ──────────────────────────────────────────────────────────────────
 
-function GapCard({ gap }: { gap: PortfolioGap }) {
+function GapCard({ gap, userId }: { gap: PortfolioGap; userId: string }) {
   const borderColor = gap.severity === 'critical' ? C.red : gap.severity === 'moderate' ? C.gold : '#4a9eff';
   const labelText   = gap.severity === 'critical' ? 'Critical' : gap.severity === 'moderate' ? 'Moderate' : 'Opportunity';
+
+  // Extract sector from gap title (e.g. "Missing: Banking exposure" → "Banking")
+  const sectorMatch = gap.title.match(/Missing:\s*(.+?)\s*exposure/i);
+  const suggested   = sectorMatch ? GAP_SUGGESTED_TICKERS[sectorMatch[1]] : null;
+
+  // For concentration gaps, extract the ticker from the title
+  const concMatch = gap.title.match(/^(?:Critical:\s*)?(\w+)\s+(?:is|overweight)/);
+  const concTicker = concMatch ? concMatch[1] : null;
 
   return (
     <div style={{ background: C.s1, borderLeft: `3px solid ${borderColor}`, borderRadius: 10, padding: '14px 16px' }}>
@@ -691,7 +724,15 @@ function GapCard({ gap }: { gap: PortfolioGap }) {
         <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{gap.title}</span>
       </div>
       <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.6, margin: '0 0 6px' }}>{gap.description}</p>
-      <p style={{ fontSize: 12, color: C.gold, lineHeight: 1.5, margin: 0 }}>↳ {gap.impact}</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <p style={{ fontSize: 12, color: C.gold, lineHeight: 1.5, margin: 0, flex: 1 }}>↳ {gap.impact}</p>
+        {suggested && userId && (
+          <WatchlistButton ticker={suggested.ticker} stockName={suggested.name} userId={userId} />
+        )}
+        {!suggested && concTicker && userId && (
+          <WatchlistButton ticker={concTicker} stockName={concTicker} userId={userId} />
+        )}
+      </div>
     </div>
   );
 }
@@ -825,11 +866,25 @@ function Gauge({ score }: { score: number }) {
 // ── Navigation ─────────────────────────────────────────────────────────────────
 
 function HealthBadge({ score }: { score: number }) {
-  const col = score >= 70 ? C.green : score >= 40 ? C.gold : C.red;
+  const col = score >= 70 ? '#4ead84' : score >= 40 ? '#d4a843' : '#e05252';
+  const label = score >= 70 ? 'Strong' : score >= 40 ? 'Moderate' : 'At Risk';
+  if (score === 0) return null;
   return (
-    <div style={{ borderColor: col, color: col }} className="flex flex-col items-center justify-center w-11 h-11 rounded-full border-2 shrink-0">
-      <span className="text-xs font-bold leading-none">{score}</span>
-      <span className="text-[9px] leading-none opacity-60">score</span>
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      background: `${col}10`, border: `1px solid ${col}25`,
+      borderRadius: 9999, padding: '4px 12px 4px 8px',
+    }}>
+      <div style={{
+        width: 8, height: 8, borderRadius: '50%',
+        background: col, boxShadow: `0 0 6px ${col}60`,
+      }} />
+      <span style={{ fontSize: 11, fontWeight: 600, color: col, letterSpacing: '0.02em' }}>
+        {score}
+      </span>
+      <span style={{ fontSize: 10, color: `${col}99`, fontWeight: 500 }}>
+        {label}
+      </span>
     </div>
   );
 }
@@ -878,18 +933,20 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
 
 function LoadingSkeleton() {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 24 }}>
-      <style>{`@keyframes shimmer { 0%{opacity:.45} 50%{opacity:.9} 100%{opacity:.45} }`}</style>
-      {/* Stat cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
-        {[1,2,3,4].map((i) => (
-          <div key={i} style={{ background: C.s1, border: `1px solid ${C.border}`, borderRadius: 14, height: 88, animation: `shimmer 1.6s ease infinite` }} />
+    <div className="flex flex-col gap-5 animate-in">
+      {/* Hero skeleton */}
+      <div className="artha-card" style={{ padding: '28px 24px' }}>
+        <div className="skeleton" style={{ width: 120, height: 12, marginBottom: 12 }} />
+        <div className="skeleton" style={{ width: 200, height: 36, marginBottom: 16 }} />
+        <div className="skeleton" style={{ width: 160, height: 14 }} />
+      </div>
+      {/* Table skeleton */}
+      <div className="artha-card" style={{ padding: '20px 24px' }}>
+        <div className="skeleton" style={{ width: 100, height: 12, marginBottom: 16 }} />
+        {[1,2,3,4].map(i => (
+          <div key={i} className="skeleton" style={{ width: '100%', height: 44, marginBottom: 8 }} />
         ))}
       </div>
-      {/* Table placeholder */}
-      <div style={{ background: C.s1, border: `1px solid ${C.border}`, borderRadius: 14, height: 280, animation: `shimmer 1.6s ease infinite` }} />
-      {/* Chart placeholder */}
-      <div style={{ background: C.s1, border: `1px solid ${C.border}`, borderRadius: 14, height: 140, animation: `shimmer 1.6s ease infinite` }} />
     </div>
   );
 }
@@ -920,38 +977,40 @@ function UserMenu({ email, onEditPortfolio, onSettings, onSignOut }: {
       <button
         onClick={() => setOpen((o) => !o)}
         style={{
-          width:        32,
-          height:       32,
-          borderRadius: '50%',
-          background:   `${C.gold}22`,
-          border:       `1px solid ${C.gold}60`,
-          color:        C.gold,
-          fontSize:     13,
-          fontWeight:   600,
-          cursor:       'pointer',
-          display:      'flex',
-          alignItems:   'center',
+          width:          24,
+          height:         24,
+          borderRadius:   '50%',
+          background:     'var(--c-s2, #18181b)',
+          border:         '1px solid var(--c-border, #2a2a2f)',
+          color:          C.text,
+          fontSize:       11,
+          fontWeight:     600,
+          cursor:         'pointer',
+          display:        'flex',
+          alignItems:     'center',
           justifyContent: 'center',
-          flexShrink:   0,
-          fontFamily:  '"DM Sans", system-ui, sans-serif',
+          flexShrink:     0,
+          fontFamily:     '"DM Sans", system-ui, sans-serif',
+          transition:     'border-color 0.15s',
         }}
+        onMouseEnter={(e) => (e.currentTarget.style.borderColor = C.gold)}
+        onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--c-border, #2a2a2f)')}
         title={email}
       >
         {initial}
       </button>
 
       {open && (
-        <div style={{
-          position:   'absolute',
-          top:        40,
-          right:      0,
-          background: C.s1,
-          border:     `1px solid ${C.border}`,
-          borderRadius: 10,
-          overflow:   'hidden',
-          zIndex:     200,
-          minWidth:   172,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+        <div className="glass-panel" style={{
+          position:      'absolute',
+          top:           32,
+          right:         0,
+          borderRadius:  10,
+          overflow:      'hidden',
+          zIndex:        200,
+          minWidth:      180,
+          border:        `1px solid ${C.border}`,
+          boxShadow:     '0 8px 32px rgba(0,0,0,0.5)',
         }}>
           <div style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}` }}>
             <p style={{ fontSize: 11, color: C.subtle, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -959,9 +1018,9 @@ function UserMenu({ email, onEditPortfolio, onSettings, onSignOut }: {
             </p>
           </div>
           {[
-            { label: '← Edit portfolio', action: onEditPortfolio },
-            { label: 'Settings',         action: onSettings },
-            { label: 'Sign out',         action: onSignOut,       danger: true },
+            { label: 'Edit portfolio', action: onEditPortfolio },
+            { label: 'Settings',       action: onSettings },
+            { label: 'Sign out',       action: onSignOut,       danger: true },
           ].map(({ label, action, danger }) => (
             <button
               key={label}
@@ -972,13 +1031,14 @@ function UserMenu({ email, onEditPortfolio, onSettings, onSignOut }: {
                 textAlign:  'left',
                 background: 'none',
                 border:     'none',
-                padding:    '10px 14px',
-                fontSize:   13,
+                padding:    '9px 14px',
+                fontSize:   12,
                 color:      danger ? C.red : C.text,
                 cursor:     'pointer',
                 fontFamily: '"DM Sans", system-ui, sans-serif',
+                transition: 'background 0.12s',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = C.s2)}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
               onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
             >
               {label}
@@ -1000,14 +1060,33 @@ function StickyNav({ activeTab, onTabChange, healthScore, onEditPortfolio, onSet
   onSignOut:       () => void;
 }) {
   return (
-    <header style={{ backgroundColor: `${C.bg}ee`, borderBottomColor: C.border }} className="sticky top-0 z-50 border-b backdrop-blur-md">
-      <div className="w-full max-w-[1100px] mx-auto px-4">
-        {/* Logo row */}
-        <div className="flex items-center justify-between h-14">
-          <span style={{ fontFamily: '"Fraunces", serif', color: C.text, fontWeight: 300, letterSpacing: '-0.5px' }} className="text-xl select-none">
-            Arth<em style={{ color: C.gold, fontStyle: 'italic' }}>a</em>
+    <header className="nav-header sticky top-0 z-50">
+      <div className="w-full max-w-[1200px] mx-auto px-6">
+        {/* Single row: Logo | Tabs | Actions */}
+        <div className="flex items-center h-16 gap-8">
+          {/* Logo */}
+          <span style={{ fontFamily: '"Fraunces", serif', fontWeight: 300, letterSpacing: '-0.5px' }} className="text-xl select-none shrink-0">
+            <span style={{ color: '#f0efe8' }}>Arth</span><em style={{ color: '#d4a843', fontStyle: 'italic' }}>a</em>
           </span>
-          <div className="flex items-center gap-3">
+
+          {/* Center: Tab navigation */}
+          <nav className="flex items-center gap-1 flex-1">
+            {TABS.map((t) => {
+              const active = t.id === activeTab;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => onTabChange(t.id)}
+                  className={`nav-tab ${active ? 'nav-tab-active' : ''}`}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Right: Health badge + User menu */}
+          <div className="flex items-center gap-3 shrink-0">
             <HealthBadge score={healthScore} />
             {user ? (
               <UserMenu
@@ -1017,32 +1096,11 @@ function StickyNav({ activeTab, onTabChange, healthScore, onEditPortfolio, onSet
                 onSignOut={onSignOut}
               />
             ) : (
-              <button onClick={onEditPortfolio} style={{ color: C.muted }} className="text-xs hover:text-white transition-colors hidden sm:block">
+              <button onClick={onEditPortfolio} className="btn-ghost btn-sm">
                 ← Edit portfolio
               </button>
             )}
           </div>
-        </div>
-        {/* Tab bar */}
-        <div className="flex overflow-x-auto gap-1.5 pb-2.5 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
-          {TABS.map((t) => {
-            const active = t.id === activeTab;
-            return (
-              <button
-                key={t.id}
-                data-tab={t.id}
-                onClick={() => onTabChange(t.id)}
-                style={{
-                  backgroundColor: active ? '#222226' : C.s2,
-                  color:           active ? C.text    : C.muted,
-                  borderColor:     C.border,
-                }}
-                className="px-4 py-1.5 text-xs font-medium rounded-full whitespace-nowrap shrink-0 border transition-colors hover:text-white"
-              >
-                {t.label}
-              </button>
-            );
-          })}
         </div>
       </div>
     </header>
@@ -1069,7 +1127,7 @@ function CardHeader({ title }: { title: string }) {
 
 // ── Proactive Alert Banner ────────────────────────────────────────────────────
 
-function ProactiveAlert({ pricedRows, onHealthTab: _onHealthTab }: {
+function ProactiveAlert({ pricedRows }: {
   pricedRows:  PricedRow[];
   onHealthTab: () => void;
 }) {
@@ -1140,14 +1198,9 @@ function DailyInsight({ text, action, loading }: {
 }) {
   if (loading) {
     return (
-      <div style={{
-        background:   C.s1,
-        border:       `1px solid ${C.border}`,
-        borderRadius: 14,
-        padding:      '20px 22px',
-        height:       80,
-        animation:    'shimmer 1.6s ease infinite',
-      }} />
+      <div className="artha-card" style={{ padding: '20px 22px', height: 80 }}>
+        <div className="skeleton" style={{ width: '80%', height: 14 }} />
+      </div>
     );
   }
 
@@ -1157,26 +1210,28 @@ function DailyInsight({ text, action, loading }: {
     <div style={{
       background:    C.s1,
       border:        `1px solid ${C.border}`,
-      borderRadius:  14,
+      borderLeft:    `3px solid ${C.gold}`,
+      borderRadius:  12,
       padding:       '18px 22px',
       display:       'flex',
       flexDirection: 'column',
       gap:           14,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-        <span style={{ color: C.gold, fontSize: 14, flexShrink: 0, marginTop: 2 }}>✦</span>
-        <p style={{ color: C.text, fontSize: 14, lineHeight: 1.75, fontStyle: 'italic', margin: 0 }}>
+        <span style={{ color: C.gold, fontSize: 13, flexShrink: 0, marginTop: 1 }}>✦</span>
+        <p style={{ color: C.text, fontSize: 13, lineHeight: 1.7, margin: 0 }}>
           {text}
         </p>
       </div>
       {action && (
         <div style={{
-          background:   C.gold,
-          borderRadius: 10,
-          padding:      '13px 18px',
+          background:   `${C.gold}12`,
+          border:       `1px solid ${C.gold}25`,
+          borderRadius: 8,
+          padding:      '11px 16px',
         }}>
-          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: '#0a0a0b', lineHeight: 1.5 }}>
-            Your action today: {action}
+          <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: C.gold, lineHeight: 1.5 }}>
+            Action: {action}
           </p>
         </div>
       )}
@@ -1188,199 +1243,9 @@ function DailyInsight({ text, action, loading }: {
 
 function SectionDivider({ label }: { label: string }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '4px 0' }}>
-      <span style={{
-        fontFamily:     '"Fraunces", serif',
-        fontWeight:     300,
-        fontSize:       15,
-        color:          C.muted,
-        whiteSpace:     'nowrap',
-        letterSpacing:  '-0.2px',
-      }}>
-        {label}
-      </span>
-      <div style={{ flex: 1, height: 1, background: C.border }} />
-    </div>
-  );
-}
-
-// ── Share Card ────────────────────────────────────────────────────────────────
-
-function ShareModal({ pricedRows, healthScore, onClose }: {
-  pricedRows:  PricedRow[];
-  healthScore: number;
-  onClose:     () => void;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [copied,  setCopied] = useState(false);
-
-  const totalInvested = pricedRows.reduce((a, r) => a + r.invested, 0);
-  const totalValue    = pricedRows.reduce((a, r) => a + r.currentValue, 0);
-  const totalPnlPct   = totalInvested > 0 ? ((totalValue - totalInvested) / totalInvested) * 100 : 0;
-  const pnlSign       = totalPnlPct >= 0 ? '+' : '';
-  const niftyBench    = 12;
-  const beatNifty     = totalPnlPct >= niftyBench;
-
-  // Draw canvas on mount
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const W = 1200, H = 630;
-    canvas.width  = W;
-    canvas.height = H;
-
-    // Background
-    ctx.fillStyle = '#0a0a0b';
-    ctx.fillRect(0, 0, W, H);
-
-    // Subtle grid lines
-    ctx.strokeStyle = '#18181b';
-    ctx.lineWidth   = 1;
-    for (let x = 0; x < W; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-    for (let y = 0; y < H; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-
-    // Top bar accent
-    const accent = ctx.createLinearGradient(0, 0, W, 0);
-    accent.addColorStop(0, '#d4a843');
-    accent.addColorStop(1, '#4ead84');
-    ctx.fillStyle = accent;
-    ctx.fillRect(0, 0, W, 4);
-
-    // Branding — "Artha"
-    ctx.fillStyle  = '#d4a843';
-    ctx.font       = 'italic 300 28px Georgia, serif';
-    ctx.textAlign  = 'left';
-    ctx.fillText('Artha', 80, 72);
-
-    // Tagline
-    ctx.fillStyle = '#5a5955';
-    ctx.font      = '400 16px "Arial", sans-serif';
-    ctx.fillText('AI-powered portfolio analytics', 80, 98);
-
-    // Portfolio return — main number
-    const mainCol = totalPnlPct >= 0 ? '#4ead84' : '#e05252';
-    ctx.fillStyle = mainCol;
-    ctx.font      = 'bold 120px Georgia, serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${pnlSign}${totalPnlPct.toFixed(1)}%`, W / 2, 340);
-
-    // Label above
-    ctx.fillStyle = '#9b9a94';
-    ctx.font      = '400 20px "Arial", sans-serif';
-    ctx.fillText('MY PORTFOLIO RETURN', W / 2, 220);
-
-    // vs Nifty comparison
-    ctx.fillStyle = '#5a5955';
-    ctx.font      = '400 18px "Arial", sans-serif';
-    ctx.fillText(`vs Nifty avg ${niftyBench}% annual benchmark`, W / 2, 410);
-
-    // Verdict badge
-    const verdictText = beatNifty ? '✦ Beating the market' : '✦ Below market average';
-    const verdictCol  = beatNifty ? '#4ead84' : '#d4a843';
-    ctx.fillStyle     = verdictCol;
-    ctx.font          = '600 22px "Arial", sans-serif';
-    ctx.fillText(verdictText, W / 2, 468);
-
-    // Bottom strip
-    ctx.fillStyle = '#111113';
-    ctx.fillRect(0, H - 90, W, 90);
-
-    // Health score
-    const hsCol = healthScore >= 70 ? '#4ead84' : healthScore >= 40 ? '#d4a843' : '#e05252';
-    ctx.fillStyle = hsCol;
-    ctx.font      = 'bold 32px Georgia, serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`${healthScore}`, 80, H - 40);
-    ctx.fillStyle = '#5a5955';
-    ctx.font      = '400 14px "Arial", sans-serif';
-    ctx.fillText('/100 health score', 80 + 40, H - 40);
-
-    // Holdings count
-    ctx.fillStyle = '#9b9a94';
-    ctx.font      = '400 14px "Arial", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${pricedRows.length} holdings tracked`, W / 2, H - 40);
-
-    // Portfolio value
-    const valStr = totalValue >= 10_000_000
-      ? `₹${(totalValue / 10_000_000).toFixed(2)} Cr`
-      : totalValue >= 100_000
-        ? `₹${(totalValue / 100_000).toFixed(2)} L`
-        : `₹${totalValue.toLocaleString('en-IN')}`;
-    ctx.fillStyle = '#f0efe8';
-    ctx.font      = '600 18px "Arial", sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(valStr, W - 80, H - 50);
-    ctx.fillStyle = '#5a5955';
-    ctx.font      = '400 12px "Arial", sans-serif';
-    ctx.fillText('portfolio value', W - 80, H - 30);
-  }, [pricedRows, healthScore, totalPnlPct, beatNifty, pnlSign]);
-
-  function download() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const link    = document.createElement('a');
-    link.download = 'artha-portfolio.png';
-    link.href     = canvas.toDataURL('image/png');
-    link.click();
-  }
-
-  function copyCaption() {
-    const caption = `My portfolio is ${pnlSign}${totalPnlPct.toFixed(1)}% vs Nifty's ${niftyBench}% annual average — tracked with Artha 📊 Health score: ${healthScore}/100`;
-    void navigator.clipboard.writeText(caption).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    });
-  }
-
-  return (
-    <div
-      style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div style={{ background: C.s1, borderRadius: 20, border: `1px solid ${C.border}`, overflow: 'hidden', maxWidth: 640, width: '100%', boxShadow: '0 24px 80px rgba(0,0,0,0.7)' }}>
-        {/* Preview */}
-        <div style={{ position: 'relative', paddingBottom: '52.5%', background: C.bg, overflow: 'hidden' }}>
-          <canvas
-            ref={canvasRef}
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-          />
-        </div>
-
-        {/* Actions */}
-        <div style={{ padding: '18px 24px', display: 'flex', alignItems: 'center', gap: 12, borderTop: `1px solid ${C.border}` }}>
-          <p style={{ color: C.muted, fontSize: 12, flex: 1, lineHeight: 1.5 }}>
-            Share your portfolio performance with the world.
-          </p>
-          <button
-            onClick={copyCaption}
-            style={{
-              background: 'none', border: `1px solid ${C.border}`, color: copied ? C.green : C.text,
-              borderRadius: 10, padding: '9px 16px', fontSize: 13, cursor: 'pointer',
-            }}
-          >
-            {copied ? '✓ Copied' : 'Copy caption'}
-          </button>
-          <button
-            onClick={download}
-            style={{
-              background: C.gold, border: 'none', color: '#0a0a0b',
-              borderRadius: 10, padding: '9px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-            }}
-          >
-            Download PNG
-          </button>
-          <button
-            onClick={onClose}
-            style={{ background: 'none', border: 'none', color: C.subtle, cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '0 4px' }}
-          >
-            ×
-          </button>
-        </div>
-      </div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '8px 0 4px' }}>
+      <span className="section-label">{label}</span>
+      <div style={{ flex: 1, height: 1, background: 'var(--c-border)' }} />
     </div>
   );
 }
@@ -1424,29 +1289,37 @@ function OneThingBar({ portfolioData, userContext }: {
 
   return (
     <div style={{
-      position:      'fixed',
-      bottom:        0,
-      left:          0,
-      right:         0,
-      zIndex:        50,
-      height:        48,
-      background:    C.s1,
-      borderTop:     `1px solid ${C.border}`,
-      display:       'flex',
-      alignItems:    'center',
-      padding:       '0 20px',
-      gap:           10,
-      boxShadow:     '0 -4px 20px rgba(0,0,0,0.4)',
+      position:       'fixed',
+      bottom:         0,
+      left:           0,
+      right:          0,
+      zIndex:         50,
+      height:         48,
+      background:     'rgba(10,10,11,0.75)',
+      backdropFilter: 'blur(12px)',
+      WebkitBackdropFilter: 'blur(12px)',
+      borderTop:      `1px solid ${C.border}`,
+      display:        'flex',
+      alignItems:     'center',
+      padding:        '0 24px',
+      gap:            12,
+      boxShadow:      '0 -4px 24px rgba(0,0,0,0.4)',
     }}>
-      <span style={{ color: C.gold, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', flexShrink: 0 }}>
-        This week →
+      <span style={{
+        color: C.gold, fontSize: 10, fontWeight: 700,
+        letterSpacing: '0.1em', textTransform: 'uppercase', flexShrink: 0,
+        borderRight: `1px solid ${C.border}`, paddingRight: 12,
+      }}>
+        This week
       </span>
       <p style={{ color: C.text, fontSize: 12, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', margin: 0 }}>
-        {loading ? <span style={{ color: C.subtle, fontStyle: 'italic' }}>Thinking…</span> : priority}
+        {loading ? <span style={{ color: C.subtle, fontStyle: 'italic' }}>Thinking...</span> : priority}
       </p>
       <button
         onClick={dismiss}
-        style={{ background: 'none', border: 'none', color: C.subtle, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 4px', flexShrink: 0 }}
+        style={{ background: 'none', border: 'none', color: C.subtle, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 4px', flexShrink: 0, transition: 'color 0.15s' }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = C.text)}
+        onMouseLeave={(e) => (e.currentTarget.style.color = C.subtle)}
       >
         ×
       </button>
@@ -1472,6 +1345,7 @@ function EditPortfolioDrawer({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset form state when drawer opens
       setHoldings(portfolio.map((h) => ({ ...h, _shares: String(h.shares), _price: String(h.avgBuyPrice) })));
       setNewForm({ name: '', ticker: '', shares: '', price: '' });
     }
@@ -1649,7 +1523,7 @@ function EditPortfolioDrawer({
 
 function PortfolioTab({
   enrichedRows, pricedRows, pricesFetching, pricesLastFetched, onRefreshPrices,
-  portfolio, portfolioData, userContext, healthScore,
+  portfolio, healthScore,
   dailyInsight, dailyAction, insightLoading, onEditPortfolio,
 }: {
   enrichedRows:      EnrichedRow[];
@@ -1658,8 +1532,6 @@ function PortfolioTab({
   pricesLastFetched: number | null;
   onRefreshPrices:   () => void;
   portfolio:         PortfolioStock[];
-  portfolioData:     PortfolioData;
-  userContext:       UserContext;
   healthScore:       number;
   dailyInsight:      string | null;
   dailyAction:       string | null;
@@ -1679,36 +1551,45 @@ function PortfolioTab({
     <div className="flex flex-col gap-5 pb-16">
 
       {/* ── Hero snapshot ─────────────────────────────────────────────────── */}
-      <div style={{ background: C.s1, border: `1px solid ${C.border}`, borderRadius: 14, padding: '24px 28px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 20 }}>
-          {/* Left: value + P&L */}
-          <div>
-            <p style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.subtle, margin: '0 0 6px' }}>
-              Portfolio Value
-            </p>
-            <p style={{ fontFamily: '"Fraunces", serif', fontWeight: 300, fontSize: 44, letterSpacing: '-2px', color: C.text, margin: 0, lineHeight: 1 }}>
-              ₹{fmt(totalValue, 0)}
-            </p>
-            <p style={{ marginTop: 10, fontSize: 15, color: totalPnl >= 0 ? C.green : C.red, fontWeight: 500, margin: '10px 0 0' }}>
-              {totalPnl >= 0 ? '+' : '−'}₹{fmt(Math.abs(totalPnl), 0)}{' '}
-              <span style={{ fontSize: 13, opacity: 0.8 }}>({fmtPct(totalPnlPct)})</span>
-            </p>
+      <div className="artha-card" style={{ padding: '28px 28px 0' }}>
+        <p style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.subtle, margin: '0 0 8px' }}>
+          Portfolio Value
+        </p>
+        <p className="display-lg" style={{ margin: 0 }}>
+          ₹{fmt(totalValue, 0)}
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+          <span style={{
+            color: totalPnl >= 0 ? C.green : C.red,
+            fontSize: 14, fontWeight: 500,
+          }}>
+            {totalPnl >= 0 ? '+' : '\u2212'}{'\u20B9'}{fmt(Math.abs(totalPnl), 0)}
+          </span>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center',
+            background: totalPnl >= 0 ? 'rgba(78,173,132,0.12)' : 'rgba(224,82,82,0.12)',
+            color: totalPnl >= 0 ? C.green : C.red,
+            borderRadius: 9999, padding: '2px 8px',
+            fontSize: 11, fontWeight: 600,
+          }}>
+            {fmtPct(totalPnlPct)}
+          </span>
+          {/* Inline health ring */}
+          <div style={{
+            width: 28, height: 28, borderRadius: '50%',
+            border: `2px solid ${scoreCol}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            marginLeft: 4,
+          }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: scoreCol, lineHeight: 1 }}>{healthScore}</span>
           </div>
-          {/* Right: health score ring */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-            <div style={{
-              width: 64, height: 64, borderRadius: '50%',
-              border: `3px solid ${scoreCol}`,
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <span style={{ fontSize: 22, fontWeight: 700, color: scoreCol, lineHeight: 1 }}>{healthScore}</span>
-              <span style={{ fontSize: 9, color: scoreCol, opacity: 0.65, letterSpacing: '0.06em' }}>SCORE</span>
-            </div>
-            <span style={{ fontSize: 10, color: scoreCol, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-              {scoreLabel}
-            </span>
-          </div>
+          <span style={{ fontSize: 10, color: scoreCol, fontWeight: 500 }}>{scoreLabel}</span>
         </div>
+        {/* Gradient accent line */}
+        <div style={{
+          height: 1, marginTop: 20,
+          background: 'linear-gradient(to right, #d4a843, transparent)',
+        }} />
       </div>
 
       {/* ── Daily insight ─────────────────────────────────────────────────── */}
@@ -1978,377 +1859,6 @@ function PlanTab({
   );
 }
 
-// ── Market Intelligence types ──────────────────────────────────────────────────
-
-interface MacroThemeItem {
-  theme:           string;
-  explanation:     string;
-  affectedSectors: string[];
-  direction:       'Positive' | 'Negative' | 'Mixed';
-  confidence:      'High' | 'Medium' | 'Low';
-  sourceHeadline:  string;
-}
-interface PortfolioImpactItem {
-  ticker:         string;
-  stockName:      string;
-  impact:         'Positive' | 'Negative' | 'Neutral';
-  reason:         string;
-  action:         'Hold' | 'Watch' | 'Consider exit' | 'Consider adding';
-  sourceHeadline: string;
-}
-interface NewsPickItem {
-  stockName:      string;
-  ticker:         string;
-  catalyst:       string;
-  reason:         string;
-  risk:           string;
-  timeHorizon:    'Days' | 'Weeks' | 'Months';
-  sourceHeadline: string;
-}
-interface NewsHeadlineItem {
-  title: string; description: string; pubDate: string; link: string; source: string;
-}
-interface MacroTheme {
-  title:           string;
-  what:            string;
-  portfolioImpact: string;
-  direction:       'Positive' | 'Negative' | 'Neutral';
-  affectedTicker:  string | null;
-}
-
-interface MacroData {
-  themes?:          MacroTheme[];
-  lastUpdated?:     string;
-  macroThemes?:     MacroThemeItem[];
-  portfolioImpacts?: PortfolioImpactItem[];
-  newsBasedPicks?:  NewsPickItem[];
-  headlinesUsed?:   NewsHeadlineItem[];
-  noNewsAvailable?: boolean;
-}
-
-// ── Market Intelligence helpers ───────────────────────────────────────────────
-
-const CATALYST_KW = ['results','earnings','q4','agr','spectrum','fundraise','merger','acquisition','approval','order','contract','judgment','verdict','stake','investment'];
-function hasCatalyst(hl: string) { const l = hl.toLowerCase(); return CATALYST_KW.some((k) => l.includes(k)); }
-function timeAgoStr(ms: number): string {
-  const m = Math.round((Date.now() - ms) / 60000);
-  if (m < 2)  return 'Live — updated just now';
-  if (m < 60) return `Updated ${m}m ago`;
-  const h = Math.round(m / 60); return `Updated ${h}h ago`;
-}
-function dirColor(d: 'Positive' | 'Negative' | 'Mixed'): string {
-  return d === 'Positive' ? C.green : d === 'Negative' ? C.red : C.gold;
-}
-function impactArrow(i: 'Positive' | 'Negative' | 'Neutral'): { a: string; c: string } {
-  return i === 'Positive' ? { a: '↑', c: C.green } : i === 'Negative' ? { a: '↓', c: C.red } : { a: '→', c: C.gold };
-}
-function actionBadgeStyle(action: string): { color: string; bg: string } {
-  if (action === 'Consider adding') return { color: C.green, bg: `${C.green}1a` };
-  if (action === 'Consider exit')   return { color: C.red,   bg: `${C.red}1a` };
-  if (action === 'Watch' || action.startsWith('Watch')) return { color: C.gold, bg: `${C.gold}1a` };
-  return { color: C.muted, bg: `${C.muted}18` };
-}
-
-// ── Market Intelligence component ─────────────────────────────────────────────
-
-function MarketIntelligence({ pricedRows, portfolioData, userContext, userId }: { pricedRows: PricedRow[]; portfolioData: PortfolioData; userContext: UserContext; userId: string }) {
-  const [data,            setData]            = useState<MacroData | null>(null);
-  const [loading,         setLoading]         = useState(false);
-  const [updating,        setUpdating]        = useState(false);
-  const [error,           setError]           = useState<string | null>(null);
-  const [headlinesOpen,   setHeadlinesOpen]   = useState(false);
-  const [lastFetched,     setLastFetched]     = useState<number | null>(null);
-  const [expandedPick,    setExpandedPick]    = useState<number | null>(null);
-  const [watchlistAdded,  setWatchlistAdded]  = useState<Set<string>>(new Set());
-  const [watchlistToast,  setWatchlistToast]  = useState<string | null>(null);
-
-  async function handleAddToWatchlist(stockName: string, ticker: string) {
-    if (watchlistAdded.has(ticker) || !userId) return;
-    const result = await addWatchlistItem(userId, stockName, ticker, null);
-    if (result) {
-      setWatchlistAdded((prev) => new Set([...prev, ticker]));
-      setWatchlistToast(`${stockName} added to watchlist`);
-      setTimeout(() => setWatchlistToast(null), 3000);
-    }
-  }
-
-  useEffect(() => {
-    const raw = sessionStorage.getItem('artha_market_intel');
-    if (raw) {
-      try {
-        const c = JSON.parse(raw) as { data: MacroData; fetchedAt: number };
-        setData(c.data);
-        setLastFetched(c.fetchedAt);
-        if (Date.now() - c.fetchedAt > 30 * 60 * 1000) void doFetch(true);
-      } catch { void doFetch(); }
-    } else {
-      void doFetch();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function doFetch(background = false) {
-    if (!portfolioData?.holdings?.length) return;
-    background ? setUpdating(true) : (setLoading(true), setError(null));
-    try {
-      const res = await fetch('/api/analyze', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'macro', portfolioData, userContext }),
-      });
-      if (!res.ok) throw new Error(`Server error ${res.status}`);
-      const json = await res.json() as { text?: string };
-      const text = json.text ?? '';
-      // Parse JSON from the response text
-      const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-      let parsed: MacroData;
-      try {
-        parsed = JSON.parse(cleaned) as MacroData;
-      } catch {
-        // If not valid JSON, create a single theme from the text
-        parsed = { themes: [] } as MacroData;
-      }
-      // Normalize: ensure themes array exists and noNewsAvailable check
-      if (!parsed.themes) parsed = { themes: [], noNewsAvailable: true } as MacroData;
-      setData(parsed);
-      const now = Date.now();
-      setLastFetched(now);
-      sessionStorage.setItem('artha_market_intel', JSON.stringify({ data: parsed, fetchedAt: now }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load market intelligence');
-    } finally { setLoading(false); setUpdating(false); }
-  }
-
-  const header = (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-      <h2 style={{ fontFamily: '"Fraunces", serif', fontWeight: 300, fontSize: 20, color: C.text, margin: 0 }}>
-        Market Intelligence
-      </h2>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {lastFetched && (
-          <span style={{ fontSize: 10, color: C.subtle, background: C.s2, border: `1px solid ${C.border}`, borderRadius: 99, padding: '3px 10px' }}>
-            {updating ? 'Updating…' : timeAgoStr(lastFetched)}
-          </span>
-        )}
-        <button
-          onClick={() => void doFetch()}
-          disabled={loading || updating}
-          style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 8, padding: '5px 12px', fontSize: 11, color: loading || updating ? C.subtle : C.muted, cursor: loading || updating ? 'not-allowed' : 'pointer', fontFamily: '"DM Sans", sans-serif' }}
-        >
-          Refresh →
-        </button>
-      </div>
-    </div>
-  );
-
-  if (loading) return (
-    <Card className="p-5">
-      {header}
-      <div style={{ textAlign: 'center', padding: '32px 0', color: C.muted, fontSize: 13 }}>
-        <div style={{ width: 24, height: 24, borderRadius: '50%', border: `2px solid ${C.gold}`, borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
-        Fetching live news and analysing your portfolio…
-      </div>
-    </Card>
-  );
-
-  // On API failure with no cached data — hide quietly per spec
-  if (error && !data) return null;
-
-  if (!data) return null;
-
-  if (data.noNewsAvailable) return (
-    <Card className="p-5">
-      {header}
-      <p style={{ color: C.muted, fontSize: 13, textAlign: 'center', padding: '20px 0' }}>Market news unavailable right now. Try again later.</p>
-    </Card>
-  );
-
-  const impactedTickers = new Set((data.portfolioImpacts ?? []).map((i) => i.ticker));
-  const unaffected      = pricedRows.filter((r) => !impactedTickers.has(r.ticker));
-
-  return (
-    <Card className="p-5">
-      {header}
-
-      {/* Watchlist success toast */}
-      {watchlistToast && (
-        <div style={{ position: 'fixed', bottom: 80, right: 24, zIndex: 9999, background: C.s1, border: `1px solid ${C.green}`, borderRadius: 10, padding: '10px 16px', color: C.text, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }}>
-          <span style={{ color: C.green }}>✓</span> {watchlistToast}
-        </div>
-      )}
-
-      {/* 3-column grid — collapses on narrow screens (old format) */}
-      {(data.macroThemes || data.portfolioImpacts || data.newsBasedPicks) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 20, alignItems: 'start' }}>
-
-          {/* ── Column 1: Macro Themes ── */}
-          {data.macroThemes && (
-            <div>
-              <p style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.10em', textTransform: 'uppercase', color: C.subtle, margin: '0 0 12px' }}>What's moving markets</p>
-              {data.macroThemes.length === 0
-                ? <p style={{ fontSize: 12, color: C.muted }}>No macro themes from today's news.</p>
-                : data.macroThemes.map((t, i) => (
-                  <div key={i} style={{ background: C.s2, borderLeft: `3px solid ${dirColor(t.direction)}`, borderRadius: 8, padding: '12px 14px', marginBottom: 10, position: 'relative' }}>
-                    <span style={{ position: 'absolute', top: 10, right: 10, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: dirColor(t.direction), background: `${dirColor(t.direction)}1a`, borderRadius: 99, padding: '2px 7px' }}>
-                      {t.confidence}
-                    </span>
-                    <p style={{ fontSize: 13, fontWeight: 500, color: C.text, margin: '0 0 4px', paddingRight: 56 }}>{t.theme}</p>
-                    <p style={{ fontSize: 12, color: C.muted, lineHeight: 1.7, margin: '0 0 10px' }}>{t.explanation}</p>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                      {t.affectedSectors.map((s) => (
-                        <span key={s} style={{ fontSize: 10, color: C.muted, background: C.s1, border: `1px solid ${C.border}`, borderRadius: 99, padding: '2px 8px' }}>{s}</span>
-                      ))}
-                    </div>
-                  </div>
-                ))
-              }
-            </div>
-          )}
-
-          {/* ── Column 2: Portfolio Impact ── */}
-          {data.portfolioImpacts && (
-            <div>
-              <p style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.10em', textTransform: 'uppercase', color: C.subtle, margin: '0 0 12px' }}>How your holdings are affected</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {data.portfolioImpacts.map((imp, i) => {
-                  const { a: arrow, c: ac } = impactArrow(imp.impact);
-                  const catalystOverride    = imp.action === 'Consider exit' && hasCatalyst(imp.sourceHeadline);
-                  const displayAction       = catalystOverride ? 'Watch closely — catalyst ahead' : imp.action;
-                  const badge               = actionBadgeStyle(displayAction);
-                  return (
-                    <div key={i} style={{ background: C.s2, borderRadius: 8, padding: '12px 14px' }}>
-                      {catalystOverride && (
-                        <div style={{ background: `${C.gold}15`, border: `1px solid ${C.gold}50`, borderRadius: 6, padding: '5px 9px', marginBottom: 8, fontSize: 11, color: C.gold, lineHeight: 1.5 }}>
-                          ⚡ Near-term catalyst detected — wait before deciding
-                        </div>
-                      )}
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: 15, color: ac, lineHeight: 1 }}>{arrow}</span>
-                          <span style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{imp.stockName}</span>
-                          <span style={{ fontSize: 10, color: C.muted }}>{imp.ticker}</span>
-                        </div>
-                        <span style={{ fontSize: 9, fontWeight: 600, color: badge.color, background: badge.bg, borderRadius: 99, padding: '3px 8px', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                          {displayAction}
-                        </span>
-                      </div>
-                      <p style={{ fontSize: 12, color: C.muted, margin: '4px 0 5px', lineHeight: 1.5 }}>{imp.reason}</p>
-                      <p style={{ fontSize: 10, color: C.subtle, margin: 0, fontStyle: 'italic' }}>
-                        Based on: {imp.sourceHeadline.slice(0, 60)}{imp.sourceHeadline.length > 60 ? '…' : ''}
-                      </p>
-                    </div>
-                  );
-                })}
-                {unaffected.map((r) => (
-                  <div key={r.ticker} style={{ background: C.s2, borderRadius: 8, padding: '10px 14px', opacity: 0.45 }}>
-                    <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>{r.name} — No significant news impact today</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Column 3: News-Driven Picks ── */}
-          {data.newsBasedPicks && (
-            <div>
-              <p style={{ fontSize: 11, fontWeight: 500, letterSpacing: '0.10em', textTransform: 'uppercase', color: C.subtle, margin: '0 0 12px' }}>Stocks the news suggests</p>
-              {data.newsBasedPicks.length === 0
-                ? <p style={{ fontSize: 12, color: C.muted }}>No news-driven picks right now.</p>
-                : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {data.newsBasedPicks.map((pick, i) => {
-                      const hc     = pick.timeHorizon === 'Days' ? C.red : pick.timeHorizon === 'Weeks' ? C.gold : C.green;
-                      const isOpen = expandedPick === i;
-                      return (
-                        <div key={i} style={{ background: C.s2, borderRadius: 8, padding: '14px 16px' }}>
-                          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                            <div>
-                              <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{pick.stockName}</span>
-                              <span style={{ fontSize: 10, color: C.gold, background: `${C.gold}1a`, borderRadius: 4, padding: '1px 6px', marginLeft: 8 }}>NSE:{pick.ticker}</span>
-                            </div>
-                            <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: hc, background: `${hc}1a`, borderRadius: 99, padding: '2px 7px', whiteSpace: 'nowrap', flexShrink: 0 }}>{pick.timeHorizon}</span>
-                          </div>
-                          <p style={{ fontSize: 12, color: C.muted, margin: '0 0 8px', lineHeight: 1.6 }}>{pick.catalyst}</p>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <button onClick={() => setExpandedPick(isOpen ? null : i)} style={{ background: 'none', border: 'none', color: C.gold, fontSize: 11, cursor: 'pointer', padding: 0, fontFamily: '"DM Sans", sans-serif' }}>
-                              Why now {isOpen ? '↑' : '→'}
-                            </button>
-                            <button
-                              onClick={() => void handleAddToWatchlist(pick.stockName, pick.ticker)}
-                              disabled={watchlistAdded.has(pick.ticker) || !userId}
-                              style={{ background: 'none', border: `1px solid ${watchlistAdded.has(pick.ticker) ? C.green : C.border}`, borderRadius: 6, padding: '3px 10px', fontSize: 10, color: watchlistAdded.has(pick.ticker) ? C.green : C.muted, cursor: watchlistAdded.has(pick.ticker) || !userId ? 'default' : 'pointer', fontFamily: '"DM Sans", sans-serif' }}
-                            >
-                              {watchlistAdded.has(pick.ticker) ? '✓ Added' : '+ Watchlist'}
-                            </button>
-                          </div>
-                          {isOpen && (
-                            <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-                              <p style={{ fontSize: 12, color: C.muted, margin: '0 0 8px', lineHeight: 1.6 }}>{pick.reason}</p>
-                              <p style={{ fontSize: 11, color: C.red, margin: 0, background: `${C.red}0d`, borderRadius: 6, padding: '6px 8px' }}>⚠ Risk: {pick.risk}</p>
-                            </div>
-                          )}
-                          <WatchlistButton ticker={pick.ticker} stockName={pick.stockName} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                )
-              }
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* New macro themes from /api/analyze */}
-      {data.themes && data.themes.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-          {data.themes.map((theme, i) => {
-            const col = theme.direction === 'Positive' ? C.green : theme.direction === 'Negative' ? C.red : C.muted;
-            return (
-              <div key={i} style={{ background: C.s2, borderRadius: 10, padding: '14px 16px', borderLeft: `3px solid ${col}` }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <span style={{ color: col, fontSize: 11, fontWeight: 700 }}>{theme.direction.toUpperCase()}</span>
-                  <span style={{ color: C.text, fontSize: 13, fontWeight: 600 }}>{theme.title}</span>
-                  {theme.affectedTicker && (
-                    <span style={{ color: C.gold, fontSize: 10, background: `${C.gold}18`, borderRadius: 4, padding: '2px 6px' }}>{theme.affectedTicker}</span>
-                  )}
-                </div>
-                <p style={{ color: C.muted, fontSize: 12, margin: '0 0 6px', lineHeight: 1.6 }}>{theme.what}</p>
-                <p style={{ color: C.text, fontSize: 12, margin: 0, lineHeight: 1.6 }}>
-                  <span style={{ color: C.gold }}>Your portfolio: </span>{theme.portfolioImpact}
-                </p>
-                {theme.affectedTicker && (
-                  <WatchlistButton ticker={theme.affectedTicker} stockName={theme.title} />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Source headlines — collapsed by default (old format only) */}
-      {data.headlinesUsed && data.headlinesUsed.length > 0 && (
-        <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
-          <button onClick={() => setHeadlinesOpen((o) => !o)} style={{ background: 'none', border: 'none', color: C.subtle, fontSize: 11, cursor: 'pointer', padding: 0, fontFamily: '"DM Sans", sans-serif', fontStyle: 'italic' }}>
-            Based on {data.headlinesUsed.length} headlines from last 48 hours — {headlinesOpen ? 'hide sources' : 'click to see sources'}
-          </button>
-          {headlinesOpen && (
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 7 }}>
-              {data.headlinesUsed.map((h, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-                  <span style={{ fontSize: 10, color: C.subtle, flexShrink: 0 }}>{new Date(h.pubDate).toLocaleDateString('en-IN')}</span>
-                  <a href={h.link} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: C.muted, textDecoration: 'none', lineHeight: 1.5 }} onMouseOver={(e) => (e.currentTarget.style.color = C.gold)} onMouseOut={(e) => (e.currentTarget.style.color = C.muted)}>{h.title}</a>
-                  <span style={{ fontSize: 9, color: C.subtle, flexShrink: 0 }}>{h.source}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </Card>
-  );
-}
-
 // ── AI Picks error boundary ────────────────────────────────────────────────────
 
 class AIPicksErrorBoundary extends Component<
@@ -2382,53 +1892,6 @@ class AIPicksErrorBoundary extends Component<
     }
     return this.props.children;
   }
-}
-
-// ── Watchlist button (localStorage, works without login) ─────────────────────
-
-function WatchlistButton({ ticker, stockName }: { ticker: string; stockName: string }) {
-  const [added, setAdded] = useState(false);
-
-  const addToWatchlist = () => {
-    const existing = JSON.parse(localStorage.getItem('artha_watchlist') || '[]') as Array<{ ticker: string }>;
-    const alreadyExists = existing.some((item) => item.ticker === ticker);
-    if (!alreadyExists) {
-      const newItem = {
-        id:          `${Date.now()}-${ticker}`,
-        stockName,
-        ticker,
-        targetPrice: null,
-        notes:       'Added from AI Picks',
-        addedAt:     new Date().toISOString(),
-      };
-      existing.push(newItem as typeof existing[0]);
-      localStorage.setItem('artha_watchlist', JSON.stringify(existing));
-    }
-    setAdded(true);
-    setTimeout(() => setAdded(false), 2000);
-  };
-
-  return (
-    <button
-      onClick={addToWatchlist}
-      style={{
-        marginTop:    '12px',
-        padding:      '6px 14px',
-        fontSize:     '11px',
-        background:   added ? '#0d1f18' : 'none',
-        border:       `1px solid ${added ? '#4ead84' : '#2a2a2f'}`,
-        borderRadius: '6px',
-        color:        added ? '#4ead84' : '#9b9a94',
-        cursor:       'pointer',
-        transition:   'all 0.2s',
-        display:      'block',
-        marginLeft:   'auto',
-        fontFamily:   '"DM Sans", system-ui, sans-serif',
-      }}
-    >
-      {added ? '✓ Added to Watchlist' : '+ Watchlist'}
-    </button>
-  );
 }
 
 // ── Tab: AI Picks ──────────────────────────────────────────────────────────────
@@ -2549,27 +2012,39 @@ function AiPicksTab({ pricedRows, portfolioData, userContext, userId }: {
             </div>
           )}
 
-          {!macroLoading && macroData?.themes?.map((theme, i) => (
-            <div key={i} style={{
-              background:   '#111113',
-              borderLeft:   `3px solid ${theme.sentiment === 'bullish' ? '#4ead84' : theme.sentiment === 'bearish' ? '#e05252' : '#d4a843'}`,
-              borderRadius: '0 8px 8px 0',
-              padding:      '12px 16px',
-              marginBottom: '8px',
-            }}>
-              <div style={{ fontSize: '13px', fontWeight: 500, color: '#f0efe8', marginBottom: '4px' }}>
-                {theme.title}
-              </div>
-              <div style={{ fontSize: '12px', color: '#9b9a94', marginBottom: '4px' }}>
-                {theme.what}
-              </div>
-              {theme.portfolioImpact && (
-                <div style={{ fontSize: '12px', color: '#d4a843' }}>
-                  → {theme.portfolioImpact}
+          {!macroLoading && macroData?.themes?.map((theme, i) => {
+            // Extract tickers mentioned in the portfolio impact (e.g. "CIPLA's -20%" → CIPLA)
+            const impactTickers = theme.portfolioImpact
+              ? [...theme.portfolioImpact.matchAll(/\b([A-Z]{3,}(?:PH|ETF)?)\b(?='s|\s)/g)].map((m) => m[1]).filter((t) => !['THE', 'AND', 'FOR', 'RBI', 'GDP', 'FII', 'INR', 'USD', 'NSE', 'BSE'].includes(t))
+              : [];
+
+            return (
+              <div key={i} style={{
+                background:   '#111113',
+                borderLeft:   `3px solid ${theme.sentiment === 'bullish' ? '#4ead84' : theme.sentiment === 'bearish' ? '#e05252' : '#d4a843'}`,
+                borderRadius: '0 8px 8px 0',
+                padding:      '12px 16px',
+                marginBottom: '8px',
+              }}>
+                <div style={{ fontSize: '13px', fontWeight: 500, color: '#f0efe8', marginBottom: '4px' }}>
+                  {theme.title}
                 </div>
-              )}
-            </div>
-          ))}
+                <div style={{ fontSize: '12px', color: '#9b9a94', marginBottom: '4px' }}>
+                  {theme.what}
+                </div>
+                {theme.portfolioImpact && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: '12px', color: '#d4a843', flex: 1 }}>
+                      → {theme.portfolioImpact}
+                    </div>
+                    {impactTickers.slice(0, 2).map((t) => (
+                      <WatchlistButton key={t} ticker={t} stockName={t} userId={userId} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -2592,7 +2067,7 @@ function AiPicksTab({ pricedRows, portfolioData, userContext, userId }: {
           <p style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.subtle, margin: '0 0 2px' }}>
             Portfolio gaps identified
           </p>
-          {gaps.map((gap, i) => <GapCard key={i} gap={gap} />)}
+          {gaps.map((gap, i) => <GapCard key={i} gap={gap} userId={userId} />)}
         </div>
       )}
 
@@ -2655,7 +2130,7 @@ function AiPicksTab({ pricedRows, portfolioData, userContext, userId }: {
             <>
               {/* Stock pick cards */}
               {cards.length > 0
-                ? cards.map((section, i) => <PickCard key={i} section={section} />)
+                ? cards.map((section, i) => <PickCard key={i} section={section} userId={userId} />)
                 : (
                   <div style={{ background: C.s2, border: `1px solid ${C.gold}40`, borderRadius: 12, padding: 16 }}>
                     <div className="ai-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(picksResponse) }} />
@@ -2894,7 +2369,7 @@ export default function Dashboard() {
     const maxW  = total > 0
       ? Math.max(...portfolio.map((h) => (h.avgBuyPrice * h.shares / total) * 100))
       : 100;
-    const profitable = portfolio.filter((h) => (h.pnl ?? 0) > 0).length;
+    const profitable = portfolio.filter((h) => ('pnl' in h) && ((h as Record<string, unknown>).pnl as number) > 0).length;
     const score = Math.round(
       Math.min(100, (n / 10) * 100) * 0.35 +
       (maxW > 50 ? 15 : maxW > 35 ? 30 : maxW > 25 ? 55 : 80) * 0.35 +
@@ -2962,7 +2437,6 @@ export default function Dashboard() {
     }
 
     void loadPortfolioData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // ── Live price state ────────────────────────────────────────────────────────
@@ -3015,7 +2489,7 @@ export default function Dashboard() {
       targetAmount: amount,
       targetDate:   targetDate.toISOString().split('T')[0],
     }]);
-  }, [goalContext]);
+  }, [goalContext, goals.length]);
 
   // ── Daily insight state ──────────────────────────────────────────────────────
   const [dailyInsight,   setDailyInsight]   = useState<string | null>(null);
@@ -3049,7 +2523,6 @@ export default function Dashboard() {
       profitability:   healthScore.profitability,
     };
     void saveHealthScore(user.id, score, breakdown, 'ai_analysis');
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, healthScore.total, healthScore.diversification, healthScore.concentration, healthScore.profitability]);
   const scenarios   = useMemo(() => computeScenarios(pricedRows),   [pricedRows]);
   const totalValue  = pricedRows.reduce((a, r) => a + r.currentValue, 0);
@@ -3140,7 +2613,6 @@ export default function Dashboard() {
     }
 
     void fetchInsight();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, pricedRows]);
 
   async function triggerMicroAnalysis(
@@ -3262,11 +2734,11 @@ export default function Dashboard() {
       )}
 
       {portfolioLoading ? (
-        <div className="w-full max-w-[1100px] mx-auto px-4 py-6">
+        <div className="w-full max-w-[1200px] mx-auto px-6 py-8">
           <LoadingSkeleton />
         </div>
       ) : (
-        <main className="w-full max-w-[1100px] mx-auto px-4 py-6">
+        <main className="w-full max-w-[1200px] mx-auto px-6 py-8">
           {activeTab === 'portfolio' && (
             <PortfolioTab
               enrichedRows={enrichedRows}
@@ -3275,8 +2747,6 @@ export default function Dashboard() {
               pricesLastFetched={pricesLastFetched}
               onRefreshPrices={() => refreshPrices(portfolio)}
               portfolio={portfolio}
-              portfolioData={portfolioData}
-              userContext={userContext}
               healthScore={healthScore.total}
               dailyInsight={dailyInsight}
               dailyAction={dailyAction}

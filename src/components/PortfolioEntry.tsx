@@ -1,10 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getMockPrice } from '../lib/mockPrices';
 import useAuth from '../hooks/useAuth';
 import { savePortfolio, hasPortfolio, saveGoalData } from '../lib/db';
 import { supabase } from '../lib/supabase';
-import { importScreenshot } from '../lib/gemini';
 import CSVImport from './CSVImport';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -82,7 +81,7 @@ function Field({
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <label style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.10em', textTransform: 'uppercase', color: C.subtle }}>
+      <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.muted }}>
         {label}
       </label>
       <input
@@ -101,211 +100,18 @@ function Field({
   );
 }
 
-// ── Screenshot import component ────────────────────────────────────────────────
+// ── Spinner ────────────────────────────────────────────────────────────────────
 
-function ScreenshotImport({ onAnalyze }: { onAnalyze: (stocks: PortfolioStock[]) => void }) {
-  const [dragging, setDragging] = useState(false);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
-  const [preview,  setPreview]  = useState<Array<{ name: string; ticker: string; shares: number; avgBuyPrice: number }> | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  async function processFile(file: File) {
-    setError(null);
-    setPreview(null);
-    setLoading(true);
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload  = () => resolve((reader.result as string).split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      const holdings = await importScreenshot(base64, file.type || 'image/jpeg');
-      if (holdings.length === 0) {
-        setError('No holdings found in screenshot. Try a clearer image showing your positions.');
-      } else {
-        setPreview(holdings);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to parse screenshot');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) void processFile(file);
-  }
-
-  function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) void processFile(file);
-  }
-
-  function handleConfirm() {
-    if (!preview) return;
-    const stocks: PortfolioStock[] = preview.map((h) => ({
-      id:          `${Date.now()}-${Math.random()}`,
-      name:        h.name,
-      ticker:      h.ticker,
-      shares:      h.shares,
-      avgBuyPrice: h.avgBuyPrice,
-    }));
-    onAnalyze(stocks);
-  }
-
+function Spinner() {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 24 }}>
-
-      {/* Drop zone — only shown before parsing */}
-      {!preview && !loading && (
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          style={{
-            border:       `2px dashed ${dragging ? C.gold : C.border}`,
-            borderRadius: 14,
-            padding:      '48px 24px',
-            textAlign:    'center',
-            cursor:       'pointer',
-            background:   dragging ? '#1a15081a' : C.s1,
-            transition:   'border-color 0.15s ease, background 0.15s ease',
-          }}
-        >
-          <div style={{ fontSize: 36, marginBottom: 12 }}>📷</div>
-          <p style={{ fontSize: 14, color: C.text, margin: '0 0 6px', fontWeight: 500 }}>
-            Drop your portfolio screenshot here
-          </p>
-          <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>
-            Works with Groww, Zerodha, Kite, or any brokerage app — click to browse
-          </p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            style={{ display: 'none' }}
-            onChange={handleFileInput}
-          />
-        </div>
-      )}
-
-      {/* Scanning state */}
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '32px 0', color: C.muted, fontSize: 14 }}>
-          <div style={{
-            width:        28,
-            height:       28,
-            borderRadius: '50%',
-            border:       `2px solid ${C.gold}`,
-            borderTopColor: 'transparent',
-            animation:    'spin 0.8s linear infinite',
-            margin:       '0 auto 14px',
-          }} />
-          Scanning screenshot with AI…
-        </div>
-      )}
-
-      {/* Error */}
-      {error && (
-        <div style={{
-          color:        C.red,
-          fontSize:     13,
-          padding:      '12px 16px',
-          background:   'rgba(224,82,82,0.06)',
-          border:       '1px solid rgba(224,82,82,0.2)',
-          borderRadius: 10,
-          display:      'flex',
-          alignItems:   'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}>
-          <span>{error}</span>
-          <button
-            onClick={() => { setError(null); fileInputRef.current?.click(); }}
-            style={{ background: 'none', border: 'none', color: C.gold, cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', fontFamily: 'inherit' }}
-          >
-            Try again
-          </button>
-        </div>
-      )}
-
-      {/* Preview table */}
-      {preview && !loading && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <p style={{ fontSize: 13, fontWeight: 500, color: C.gold, margin: 0 }}>
-            ✦ Found {preview.length} holding{preview.length !== 1 ? 's' : ''}
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {preview.map((h, i) => (
-              <div
-                key={i}
-                style={{
-                  background:     C.s1,
-                  border:         `1px solid ${C.border}`,
-                  borderRadius:   10,
-                  padding:        '14px 16px',
-                  display:        'flex',
-                  alignItems:     'center',
-                  justifyContent: 'space-between',
-                }}
-              >
-                <div>
-                  <span style={{ fontSize: 14, fontWeight: 500, color: C.text }}>{h.name}</span>
-                  <span style={{ fontSize: 12, color: C.muted, marginLeft: 10 }}>{h.ticker}</span>
-                </div>
-                <span style={{ fontSize: 13, color: C.muted }}>
-                  {h.shares} shares · ₹{h.avgBuyPrice > 0 ? fmt(h.avgBuyPrice) : '—'}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-            <button
-              onClick={() => { setPreview(null); setError(null); }}
-              style={{
-                flex:         1,
-                background:   'none',
-                border:       `1px solid ${C.border}`,
-                borderRadius: 10,
-                padding:      '12px 0',
-                fontSize:     13,
-                color:        C.muted,
-                cursor:       'pointer',
-                fontFamily:   '"DM Sans", sans-serif',
-              }}
-            >
-              Try different image
-            </button>
-            <button
-              onClick={handleConfirm}
-              style={{
-                flex:         2,
-                background:   C.gold,
-                border:       'none',
-                borderRadius: 10,
-                padding:      '12px 0',
-                fontSize:     14,
-                fontWeight:   500,
-                color:        C.bg,
-                cursor:       'pointer',
-                fontFamily:   '"DM Sans", sans-serif',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.opacity = '0.88')}
-              onMouseOut={(e)  => (e.currentTarget.style.opacity = '1')}
-            >
-              Confirm &amp; Analyse →
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 20 20"
+      style={{ animation: 'spin 0.8s linear infinite', marginRight: 8, verticalAlign: 'middle' }}
+    >
+      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeDasharray="40 20" />
+    </svg>
   );
 }
 
@@ -417,55 +223,85 @@ export default function PortfolioEntry() {
 
       {/* Confirmation toast */}
       {addedToast && (
-        <div style={{
-          position:     'fixed',
-          bottom:       32,
-          left:         '50%',
-          transform:    'translateX(-50%)',
-          background:   'rgba(78,173,132,0.12)',
-          border:       '1px solid rgba(78,173,132,0.35)',
-          borderRadius: 10,
-          padding:      '10px 20px',
-          fontSize:     13,
-          color:        C.green,
-          fontWeight:   500,
-          zIndex:       9999,
-          whiteSpace:   'nowrap',
-          pointerEvents: 'none',
-        }}>
-          ✓ {addedToast}
+        <div
+          className="glass-panel"
+          style={{
+            position:      'fixed',
+            bottom:        32,
+            left:          '50%',
+            transform:     'translateX(-50%)',
+            padding:       '12px 24px',
+            fontSize:      13,
+            color:         C.green,
+            fontWeight:    500,
+            zIndex:        9999,
+            whiteSpace:    'nowrap',
+            pointerEvents: 'none',
+            display:       'flex',
+            alignItems:    'center',
+            gap:           8,
+            animation:     'fadeInUp 0.25s ease-out',
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: '50%', background: 'rgba(78,173,132,0.15)', fontSize: 11 }}>
+            ✓
+          </span>
+          {addedToast}
         </div>
       )}
 
       {/* ── Left branding panel ─────────────────────────────────────────────── */}
-      <div className="entry-left">
-        <div className="entry-left-inner">
+      <div className="entry-left" style={{ background: '#08080a' }}>
+        <div className="entry-left-inner" style={{ position: 'relative', zIndex: 1 }}>
+
+          {/* Animated glow behind logo */}
+          <div style={{
+            position: 'absolute',
+            top: '10%',
+            left: '50%',
+            transform: 'translate(-50%, -30%)',
+            width: 280,
+            height: 280,
+            borderRadius: '50%',
+            background: `radial-gradient(circle, rgba(212,168,67,0.08) 0%, rgba(212,168,67,0.02) 50%, transparent 70%)`,
+            filter: 'blur(40px)',
+            animation: 'pulseGlow 4s ease-in-out infinite',
+            pointerEvents: 'none',
+          }} />
 
           {/* Logo */}
-          <h1 style={{ fontFamily: '"Fraunces", serif', fontWeight: 300, fontSize: 120, letterSpacing: '-4px', color: C.text, margin: 0, lineHeight: 1 }}>
+          <h1 style={{ fontFamily: '"Fraunces", serif', fontWeight: 300, fontSize: 96, letterSpacing: '-3px', color: C.text, margin: 0, lineHeight: 1, position: 'relative' }}>
             Arth<em style={{ color: C.gold, fontStyle: 'italic' }}>a</em>
           </h1>
 
           {/* Tagline */}
-          <p style={{ marginTop: 28, fontSize: 22, color: C.muted, lineHeight: 1.8, margin: '28px 0 0' }}>
+          <p style={{ marginTop: 20, fontSize: 18, color: C.muted, lineHeight: 1.8, margin: '20px 0 0', letterSpacing: '0.01em' }}>
             Portfolio intelligence for the Indian investor
           </p>
 
+          {/* Divider */}
+          <div style={{ width: 48, height: 1, background: `linear-gradient(to right, transparent, ${C.gold}44, transparent)`, margin: '36px 0' }} />
+
           {/* Feature pills */}
-          <div style={{ marginTop: 52, marginBottom: 60, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', width: '100%' }}>
-            {['✦ AI Health Score', '✦ Scenario Simulation', '✦ Goal Tracker'].map((pill) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, alignItems: 'center', width: '100%' }}>
+            {['AI Health Score', 'Scenario Simulation', 'Goal Tracker'].map((pill) => (
               <span
                 key={pill}
                 style={{
-                  background:   C.s2,
+                  background:   'rgba(255,255,255,0.02)',
                   border:       `1px solid ${C.border}`,
                   borderRadius: 99,
-                  padding:      '13px 32px',
-                  fontSize:     18,
-                  color:        C.muted,
+                  padding:      '10px 28px',
+                  fontSize:     14,
+                  color:        C.subtle,
                   width:        'fit-content',
+                  letterSpacing: '0.04em',
+                  display:      'flex',
+                  alignItems:   'center',
+                  gap:          8,
                 }}
               >
+                <span style={{ color: C.gold, fontSize: 10 }}>&#9670;</span>
                 {pill}
               </span>
             ))}
@@ -476,11 +312,11 @@ export default function PortfolioEntry() {
         <p
           style={{
             position:   'absolute',
-            bottom:     24,
+            bottom:     28,
             left:       0,
             right:      0,
-            fontSize:   15,
-            color:      C.subtle,
+            fontSize:   13,
+            color:      '#4a4a45',
             fontStyle:  'italic',
             textAlign:  'center',
             padding:    '0 60px',
@@ -501,41 +337,52 @@ export default function PortfolioEntry() {
 
           {/* Heading */}
           <div>
-            <h2 style={{ fontFamily: '"Fraunces", serif', fontWeight: 300, fontSize: 28, letterSpacing: '-0.5px', color: C.text, margin: '0 0 6px' }}>
+            <h2 style={{ fontFamily: '"Fraunces", serif', fontWeight: 300, fontSize: 30, letterSpacing: '-0.5px', color: C.text, margin: '0 0 8px' }}>
               Build your portfolio
             </h2>
-            <p style={{ fontSize: 12, color: C.muted, margin: '0 0 24px' }}>
+            <p style={{ fontSize: 13, color: C.muted, margin: 0, lineHeight: 1.6 }}>
               Add holdings below. Live P&amp;L updates automatically.
             </p>
           </div>
 
-          {/* Mode toggle cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {/* Mode toggle — pill segmented control */}
+          <div style={{
+            display:      'flex',
+            background:   C.s2,
+            border:       `1px solid ${C.border}`,
+            borderRadius: 12,
+            padding:      4,
+            gap:          0,
+          }}>
             {(['manual', 'csv'] as const).map((m) => {
               const active = mode === m;
-              const meta = {
-                manual: { title: 'Manual',     sub: 'Enter one by one' },
-                csv:    { title: 'Import CSV', sub: 'Groww or Zerodha export' },
-              };
+              const labels = { manual: 'Manual Entry', csv: 'Import CSV' };
+              const subs   = { manual: 'Add one by one', csv: 'Groww or Zerodha' };
               return (
                 <button
                   key={m}
                   onClick={() => setMode(m)}
                   style={{
-                    background:    active ? '#1a1508' : C.s1,
-                    border:        `1px solid ${active ? C.gold : C.border}`,
-                    borderRadius:  10,
-                    padding:       '14px 14px',
-                    cursor:        'pointer',
-                    textAlign:     'left',
-                    display:       'flex',
-                    flexDirection: 'column',
-                    gap:           3,
-                    transition:    'border-color 0.15s ease, background 0.15s ease',
+                    flex:           1,
+                    background:     active ? C.s1 : 'transparent',
+                    border:         'none',
+                    borderRadius:   10,
+                    padding:        '12px 16px',
+                    cursor:         'pointer',
+                    textAlign:      'center',
+                    transition:     'all 0.2s ease',
+                    display:        'flex',
+                    flexDirection:  'column',
+                    alignItems:     'center',
+                    gap:            2,
                   }}
                 >
-                  <span style={{ fontSize: 12, fontWeight: 500, color: C.text }}>{meta[m].title}</span>
-                  <span style={{ fontSize: 10, color: C.subtle, marginTop: 2 }}>{meta[m].sub}</span>
+                  <span style={{ fontSize: 13, fontWeight: active ? 600 : 400, color: active ? C.text : C.muted, transition: 'color 0.2s ease' }}>
+                    {labels[m]}
+                  </span>
+                  <span style={{ fontSize: 10, color: C.subtle }}>
+                    {subs[m]}
+                  </span>
                 </button>
               );
             })}
@@ -545,12 +392,19 @@ export default function PortfolioEntry() {
           {mode === 'manual' && (
             <>
               <form onSubmit={handleAdd} style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '24px 0 16px' }}>
-                  <p style={{ fontSize: 10, fontWeight: 500, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.subtle, margin: 0 }}>Add a holding</p>
-                  <p style={{ fontSize: 11, color: C.subtle, fontStyle: 'italic', margin: 0 }}>Your portfolio is private and never shared.</p>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 20px' }}>
+                  <p style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: C.muted, margin: 0 }}>
+                    Add a holding
+                  </p>
+                  <p style={{ fontSize: 11, color: C.subtle, fontStyle: 'italic', margin: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ opacity: 0.6 }}>
+                      <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 2.5a1 1 0 110 2 1 1 0 010-2zM6.5 7h3v5h-3V7z" fill="currentColor"/>
+                    </svg>
+                    Your portfolio is private and never shared.
+                  </p>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   <Field label="Stock Name"   name="name"        value={form.name}        onChange={handleChange} placeholder="e.g. Reliance Industries" error={errors.name} />
                   <Field label="Ticker"        name="ticker"      value={form.ticker}      onChange={handleChange} placeholder="e.g. RELIANCE"            error={errors.ticker}      helperText="NSE symbol — e.g. RELIANCE, HDFCBANK, INFY" />
                   <Field label="Shares"        name="shares"      value={form.shares}      onChange={handleChange} placeholder="e.g. 10"   type="number"  error={errors.shares} />
@@ -560,75 +414,87 @@ export default function PortfolioEntry() {
                 <button
                   type="submit"
                   style={{
-                    display:      'block',
+                    display:      'flex',
+                    alignItems:   'center',
+                    justifyContent: 'center',
+                    gap:          6,
                     marginLeft:   'auto',
-                    marginTop:    16,
+                    marginTop:    20,
                     width:        'fit-content',
-                    background:   C.gold,
-                    color:        C.bg,
-                    border:       'none',
-                    borderRadius: 8,
+                    background:   'transparent',
+                    color:        C.gold,
+                    border:       `1px solid ${C.gold}44`,
+                    borderRadius: 10,
                     padding:      '10px 24px',
                     fontSize:     13,
                     fontWeight:   500,
                     cursor:       'pointer',
                     fontFamily:   "'DM Sans', sans-serif",
-                    transition:   'opacity 0.15s ease',
+                    transition:   'all 0.2s ease',
                   }}
-                  onMouseOver={(e) => (e.currentTarget.style.opacity = '0.85')}
-                  onMouseOut={(e)  => (e.currentTarget.style.opacity = '1')}
+                  onMouseOver={(e) => { e.currentTarget.style.background = `${C.gold}12`; e.currentTarget.style.borderColor = `${C.gold}88`; }}
+                  onMouseOut={(e)  => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = `${C.gold}44`; }}
                 >
-                  + Add Stock
+                  <span style={{ fontSize: 16, lineHeight: 1 }}>+</span> Add Stock
                 </button>
               </form>
 
               {/* Holdings list */}
               {portfolio.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                  <p style={{ fontSize: 15, fontWeight: 500, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.subtle, margin: 0 }}>
-                    {portfolio.length} holding{portfolio.length !== 1 ? 's' : ''} added
-                  </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: C.muted, margin: 0 }}>
+                      {portfolio.length} holding{portfolio.length !== 1 ? 's' : ''} added
+                    </p>
+                    <p style={{ fontSize: 11, color: C.subtle, margin: 0 }}>
+                      ₹{fmt(rows.reduce((s, r) => s + r.invested, 0), 0)} invested
+                    </p>
+                  </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {rows.map((row) => (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {rows.map((row, idx) => (
                       <div
                         key={row.id}
+                        className="artha-card"
                         style={{
-                          background:     C.s1,
-                          border:         `1px solid ${C.border}`,
-                          borderRadius:   12,
-                          padding:        '20px 24px',
                           display:        'flex',
                           alignItems:     'center',
                           justifyContent: 'space-between',
-                          gap:            20,
+                          gap:            16,
+                          padding:        '16px 20px',
+                          animation:      `fadeInUp 0.25s ease-out ${idx * 0.05}s both`,
                         }}
                       >
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <span style={{ fontSize: 20, fontWeight: 500, color: C.text }}>{row.name}</span>
-                          <span style={{ fontSize: 15, color: C.muted, marginLeft: 12 }}>{row.ticker}</span>
+                        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                          <span style={{ fontSize: 15, fontWeight: 500, color: C.text }}>{row.name}</span>
+                          <span style={{ fontSize: 11, color: C.subtle, fontWeight: 500, letterSpacing: '0.04em' }}>{row.ticker}</span>
                         </div>
-                        <span style={{ fontSize: 17, color: C.muted, whiteSpace: 'nowrap' }}>
-                          {row.shares} shares · ₹{fmt(row.avgBuyPrice)}
+                        <span style={{ fontSize: 13, color: C.muted, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                          {row.shares} shares &middot; ₹{fmt(row.avgBuyPrice)}
                         </span>
                         <button
                           onClick={() => handleRemove(row.id)}
                           style={{
-                            background: 'none',
-                            border:     'none',
-                            color:      C.subtle,
-                            cursor:     'pointer',
-                            fontSize:   28,
-                            lineHeight: 1,
-                            padding:    '0 4px',
-                            flexShrink: 0,
-                            fontFamily: 'inherit',
+                            background:   'transparent',
+                            border:       '1px solid transparent',
+                            color:        C.subtle,
+                            cursor:       'pointer',
+                            fontSize:     18,
+                            lineHeight:   1,
+                            padding:      '4px 8px',
+                            flexShrink:   0,
+                            fontFamily:   'inherit',
+                            borderRadius: 6,
+                            transition:   'all 0.15s ease',
+                            display:      'flex',
+                            alignItems:   'center',
+                            justifyContent: 'center',
                           }}
                           aria-label={`Remove ${row.name}`}
-                          onMouseOver={(e) => (e.currentTarget.style.color = C.red)}
-                          onMouseOut={(e)  => (e.currentTarget.style.color = C.subtle)}
+                          onMouseOver={(e) => { e.currentTarget.style.color = C.red; e.currentTarget.style.background = 'rgba(224,82,82,0.08)'; e.currentTarget.style.borderColor = 'rgba(224,82,82,0.2)'; }}
+                          onMouseOut={(e)  => { e.currentTarget.style.color = C.subtle; e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent'; }}
                         >
-                          ×
+                          &#215;
                         </button>
                       </div>
                     ))}
@@ -639,33 +505,46 @@ export default function PortfolioEntry() {
                     onClick={handleAnalyze}
                     disabled={saving}
                     style={{
-                      marginTop:    8,
+                      marginTop:    4,
                       background:   saving ? '#a0803a' : C.gold,
                       color:        C.bg,
                       border:       'none',
                       borderRadius: 14,
-                      padding:      '22px 0',
-                      fontSize:     20,
-                      fontWeight:   500,
+                      padding:      '20px 0',
+                      fontSize:     17,
+                      fontWeight:   600,
                       cursor:       saving ? 'not-allowed' : 'pointer',
                       width:        '100%',
                       fontFamily:   "'DM Sans', sans-serif",
-                      transition:   'background 0.15s ease',
+                      transition:   'all 0.2s ease',
                       opacity:      saving ? 0.85 : 1,
+                      letterSpacing: '0.01em',
+                      display:      'flex',
+                      alignItems:   'center',
+                      justifyContent: 'center',
                     }}
-                    onMouseOver={(e) => { if (!saving) e.currentTarget.style.background = '#f0c96a'; }}
-                    onMouseOut={(e)  => { if (!saving) e.currentTarget.style.background = C.gold; }}
+                    onMouseOver={(e) => { if (!saving) { e.currentTarget.style.background = '#e8bc5a'; e.currentTarget.style.boxShadow = '0 0 20px rgba(212,168,67,0.15)'; } }}
+                    onMouseOut={(e)  => { if (!saving) { e.currentTarget.style.background = C.gold; e.currentTarget.style.boxShadow = 'none'; } }}
                   >
-                    {saving ? 'Saving…' : 'Analyse Portfolio →'}
+                    {saving && <Spinner />}
+                    {saving ? 'Saving...' : 'Analyse Portfolio  \u2192'}
                   </button>
                 </div>
               )}
 
               {/* Empty state */}
               {portfolio.length === 0 && (
-                <p style={{ fontSize: 18, color: C.subtle, textAlign: 'center', padding: '40px 0', margin: 0 }}>
-                  Your holdings will appear here once you add a stock.
-                </p>
+                <div style={{ textAlign: 'center', padding: '48px 24px' }}>
+                  <div style={{ fontSize: 32, marginBottom: 16, opacity: 0.15 }}>
+                    &#9670;
+                  </div>
+                  <p style={{ fontSize: 15, color: C.subtle, margin: '0 0 6px', lineHeight: 1.6 }}>
+                    No holdings yet
+                  </p>
+                  <p style={{ fontSize: 13, color: '#3a3a36', margin: 0, lineHeight: 1.6 }}>
+                    Add your first stock above to get started.
+                  </p>
+                </div>
               )}
             </>
           )}
@@ -677,6 +556,22 @@ export default function PortfolioEntry() {
 
         </div>
       </div>
+
+      {/* Inline keyframes */}
+      <style>{`
+        @keyframes pulseGlow {
+          0%, 100% { opacity: 0.6; transform: translate(-50%, -30%) scale(1); }
+          50% { opacity: 1; transform: translate(-50%, -30%) scale(1.08); }
+        }
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
