@@ -1,0 +1,295 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;0,500;1,300&family=DM+Sans:wght@300;400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0a0a0b;
+  --font-sans: "DM Sans", system-ui, sans-serif;
+  --font-display: "Fraunces", serif;
+}
+
+/* ── Reset ──────────────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+}
+
+body {
+  background: #0a0a0b;
+  color: #f0efe8;
+  font-family: 'DM Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+}
+
+#root {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+/* ── Design tokens ─────────────────────────────────────────────────────────── */
+
+:root {
+  --c-bg:           #0a0a0b;
+  --c-s1:           #111113;
+  --c-s2:           #18181b;
+  --c-border:       #2a2a2f;
+  --c-border-hover: #38383f;
+  --c-text:         #f0efe8;
+  --c-muted:        #9b9a94;
+  --c-subtle:       #5a5955;
+  --c-gold:         #d4a843;
+  --c-green:        #4ead84;
+  --c-red:          #e05252;
+}
+
+/* ── Entry page split layout ───────────────────────────────────────────────── */
+
+.entry-split {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: #0a0a0b;
+}
+
+.entry-left {
+  width: 40%;
+  height: 100vh;
+  background: #111113;
+  border-right: 1px solid #2a2a2f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px;
+  position: fixed;
+  left: 0;
+  top: 0;
+}
+
+.entry-left-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+  max-width: 520px;
+}
+
+.entry-right {
+  margin-left: 40%;
+  width: 60%;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 80px 72px;
+  background: #0a0a0b;
+}
+
+.entry-right-inner {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+
+/* ── Dashboard page (needs scrolling, not fixed) ───────────────────────────── */
+
+.dashboard-page {
+  min-height: 100vh;
+  overflow-y: auto;
+}
+
+/* ── Card surface ──────────────────────────────────────────────────────────── */
+
+.artha-card {
+  border-color: var(--c-border);
+  transition: border-color 0.18s ease;
+}
+.artha-card:hover {
+  border-color: var(--c-border-hover);
+}
+
+/* ── Metric labels ─────────────────────────────────────────────────────────── */
+
+.metric-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  font-family: 'DM Sans', system-ui, sans-serif;
+}
+
+/* ── Table header cells ────────────────────────────────────────────────────── */
+
+.table-head {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--c-subtle);
+  font-family: 'DM Sans', system-ui, sans-serif;
+}
+
+/* ── Heading numbers (Fraunces light) ──────────────────────────────────────── */
+
+.display-num {
+  font-family: 'Fraunces', serif;
+  font-weight: 300;
+  letter-spacing: -0.5px;
+}
+
+/* ── Section label ─────────────────────────────────────────────────────────── */
+
+.section-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-subtle);
+  font-family: 'DM Sans', system-ui, sans-serif;
+}
+
+/* ── Entry page input style ────────────────────────────────────────────────── */
+
+.entry-input {
+  background: #111113;
+  border: 1px solid #2a2a2f;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #f0efe8;
+  font-family: 'DM Sans', sans-serif;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.entry-input::placeholder {
+  color: #5a5955;
+}
+
+.entry-input:focus {
+  border-color: #d4a843;
+}
+
+.entry-input.error {
+  border-color: rgba(224, 82, 82, 0.6);
+}
+
+/* ── AI output markdown rendering ──────────────────────────────────────────── */
+
+.ai-output h2 {
+  font-family: 'Fraunces', serif;
+  font-size: 16px;
+  font-weight: 400;
+  color: #f0efe8;
+  margin: 20px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #2a2a2f;
+  letter-spacing: -0.2px;
+}
+
+.ai-output h2:first-child {
+  margin-top: 0;
+}
+
+.ai-output h3 {
+  font-family: 'Fraunces', serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: #f0efe8;
+  margin: 16px 0 6px;
+}
+
+.ai-output p {
+  font-size: 13px;
+  color: #9b9a94;
+  line-height: 1.8;
+  margin: 0 0 12px;
+}
+
+.ai-output p:last-child {
+  margin-bottom: 0;
+}
+
+.ai-output strong {
+  color: #f0efe8;
+  font-weight: 500;
+}
+
+.ai-output em {
+  color: #d4a843;
+  font-style: normal;
+}
+
+.ai-output ul {
+  margin: 8px 0 16px;
+  padding-left: 0;
+  list-style: none;
+}
+
+.ai-output ul li {
+  font-size: 13px;
+  color: #9b9a94;
+  line-height: 1.8;
+  padding: 6px 0 6px 20px;
+  border-bottom: 1px solid #1e1e22;
+  position: relative;
+}
+
+.ai-output ul li::before {
+  content: '✦';
+  position: absolute;
+  left: 0;
+  color: #d4a843;
+  font-size: 8px;
+  top: 10px;
+}
+
+.ai-output ul li:last-child {
+  border-bottom: none;
+}
+
+.ai-output ol {
+  margin: 8px 0 16px;
+  padding-left: 20px;
+}
+
+.ai-output ol li {
+  font-size: 13px;
+  color: #9b9a94;
+  line-height: 1.8;
+  margin-bottom: 4px;
+}
+
+.ai-output hr {
+  border: none;
+  border-top: 1px solid #2a2a2f;
+  margin: 16px 0;
+}
+
+.ai-output blockquote {
+  border-left: 3px solid #d4a843;
+  margin: 12px 0;
+  padding: 4px 12px;
+  color: #9b9a94;
+  font-size: 13px;
+}

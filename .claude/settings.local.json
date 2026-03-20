@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/HP/OneDrive/Desktop/**)",
+      "Bash(npm create:*)",
+      "Bash(cd:*)",
+      "Read(//c/Users/HP/AppData/Local/Temp/**)",
+      "Bash(npx create-vite@latest artha-temp --template react-ts)",
+      "Bash(cp:*)",
+      "Bash(vercel:*)",
+      "Bash(tasklist:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(npm run:*)",
+      "Bash(sed:*)",
+      "Bash(curl:*)"
+    ]
+  }
+}
